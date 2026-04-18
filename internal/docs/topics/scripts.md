@@ -54,8 +54,10 @@ scripts (merged as the third layer).
 Scripts run sequentially in order. If any script exits with a non-zero code, execution
 stops immediately and `facet apply` returns an error.
 
-Scripts run with the config directory as the working directory, so relative paths like
-`./scripts/setup.sh` resolve against the config repo.
+Scripts run with the working directory of the layer that defined them. Local profile
+and `.local.yaml` scripts run from the config directory. Scripts inherited from a
+git-based base run from the temporary clone root for that base, so relative paths like
+`./scripts/setup.sh` resolve against the correct source tree.
 
 ## Interactive Scripts
 
@@ -91,7 +93,7 @@ Valid stages (in execution order):
 
 | Stage | Description |
 |-------|-------------|
-| `configs` | Deploy symlinks and templates |
+| `configs` | Deploy symlinks, rendered templates, and copied remote-base configs |
 | `pre_apply` | Run pre_apply scripts |
 | `packages` | Install packages |
 | `post_apply` | Run post_apply scripts |

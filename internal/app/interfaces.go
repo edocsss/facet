@@ -13,6 +13,10 @@ type ProfileLoader interface {
 	LoadConfig(path string) (*profile.FacetConfig, error)
 }
 
+type BaseResolver interface {
+	Resolve(rawExtends string, localConfigDir string) (*profile.ResolvedBase, error)
+}
+
 // Reporter handles formatted terminal output.
 type Reporter interface {
 	Success(msg string)

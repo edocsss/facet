@@ -54,10 +54,10 @@ facet status
 ### Three layers, one merge
 
 ```
-base.yaml              →  shared packages, configs, vars
-  + profiles/work.yaml →  work-specific additions & overrides
-  + ~/.facet/.local.yaml →  machine secrets (never committed)
-  ──────────────────────
+resolved base from extends →  shared packages, configs, vars
+  + profiles/work.yaml     →  work-specific additions & overrides
+  + ~/.facet/.local.yaml   →  machine secrets (never committed)
+  ─────────────────────────
   = your fully resolved environment
 ```
 
@@ -70,8 +70,8 @@ Each layer can define **packages**, **configs**, and **variables**. Layers merge
 ├── facet.yaml                 # marker (facet finds your repo by this)
 ├── base.yaml                  # shared foundation
 ├── profiles/
-│   ├── work.yaml              # extends: base
-│   └── personal.yaml          # extends: base
+│   ├── work.yaml              # extends: ./base.yaml
+│   └── personal.yaml          # extends: git@github.com:me/dotfiles.git@main
 ├── configs/
 │   ├── .zshrc                 # shared dotfile → symlinked
 │   ├── .gitconfig             # has ${facet:...} → templated
@@ -88,11 +88,26 @@ Each layer can define **packages**, **configs**, and **variables**. Layers merge
 
 ## Profiles
 
-Every profile declares `extends: base` and inherits everything from `base.yaml`. Add or override anything.
+Each profile points `extends` at a base locator. Supported forms include:
+
+- `base.yaml`
+- `shared/base.yaml`
+- `./shared-config`
+- `https://github.com/me/personal-dotfiles.git`
+- `https://github.com/me/personal-dotfiles.git@main`
+- `git@github.com:me/personal-dotfiles.git@v1.2.0`
+
+Merge order is:
+
+1. resolved base from `extends`
+2. selected profile
+3. `~/.facet/.local.yaml`
+
+When the base comes from git, facet clones it fresh for each `apply` and removes the clone after the run. Configs inherited from that git base are materialized into place instead of symlinked so they keep working after cleanup.
 
 ```yaml
 # profiles/work.yaml
-extends: base
+extends: ./base.yaml
 
 vars:
   git:
@@ -152,6 +167,9 @@ facet auto-detects the right strategy for each file:
 | No `${facet:...}` | **Symlink** | `~/.zshrc → ~/dotfiles/configs/.zshrc` |
 | Has `${facet:...}` | **Template** | Variables resolved, written as regular file |
 | Directory | **Symlink** | Entire directory symlinked |
+| Remote git base file or directory without `${facet:...}` | **Copy** | Materialized regular file or directory |
+
+Config source paths are resolved relative to the layer that defined them. Local profiles still behave like today. Git-based bases are cloned to a temporary directory for the duration of `facet apply`, so inherited configs from that clone are copied or templated rather than symlinked.
 
 When switching profiles, facet **cleans up the old profile first** — orphaned configs are removed, new ones deployed. It's always a clean slate.
 
@@ -222,7 +240,7 @@ facet scaffold
 
 ### `facet apply <profile>`
 
-The main event. Loads your config, merges layers, deploys configs, runs scripts, installs packages, and records state.
+The main event. Resolves the base from `extends`, merges layers, deploys configs, runs scripts, installs packages, and records state.
 
 ```sh
 facet apply work

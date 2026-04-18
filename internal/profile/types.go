@@ -13,19 +13,26 @@ type FacetMeta struct {
 
 // FacetConfig represents a parsed base.yaml, profile, or .local.yaml.
 type FacetConfig struct {
-	Extends   string            `yaml:"extends,omitempty"`
-	Vars      map[string]any    `yaml:"vars,omitempty"`
-	Packages  []PackageEntry    `yaml:"packages,omitempty"`
-	Configs   map[string]string `yaml:"configs,omitempty"`
-	AI        *AIConfig         `yaml:"ai,omitempty"`
-	PreApply  []ScriptEntry     `yaml:"pre_apply,omitempty"`
-	PostApply []ScriptEntry     `yaml:"post_apply,omitempty"`
+	Extends    string                      `yaml:"extends,omitempty"`
+	Vars       map[string]any              `yaml:"vars,omitempty"`
+	Packages   []PackageEntry              `yaml:"packages,omitempty"`
+	Configs    map[string]string           `yaml:"configs,omitempty"`
+	ConfigMeta map[string]ConfigProvenance `yaml:"-"`
+	AI         *AIConfig                   `yaml:"ai,omitempty"`
+	PreApply   []ScriptEntry               `yaml:"pre_apply,omitempty"`
+	PostApply  []ScriptEntry               `yaml:"post_apply,omitempty"`
 }
 
 // ScriptEntry is a named shell command run during facet apply.
 type ScriptEntry struct {
-	Name string `yaml:"name"`
-	Run  string `yaml:"run"`
+	Name    string `yaml:"name"`
+	Run     string `yaml:"run"`
+	WorkDir string `yaml:"-"`
+}
+
+type ConfigProvenance struct {
+	SourceRoot  string `yaml:"-"`
+	Materialize bool   `yaml:"-"`
 }
 
 // PackageEntry is a package with a name, optional check command, and install command.

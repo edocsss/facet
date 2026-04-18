@@ -8,7 +8,7 @@ This document captures all design decisions made during the brainstorming phase.
 
 ### In scope (v1)
 - Config loading, merging, variable resolution
-- Config deployment (symlink / template) with unapply/apply model
+- Config deployment (symlink / template / copy) with unapply/apply model
 - Package installation (user-provided commands)
 - AI tool configuration (permissions, skills, MCPs for supported agents)
 - CLI commands: `facet init`, `facet apply <profile>`, `facet status`
@@ -76,7 +76,7 @@ Future metadata fields will be added here as needs arise.
 
 ### 3.2 base.yaml
 
-The shared foundation config that all profiles extend. Same schema as profile files, minus the `extends` field.
+The shared foundation config for a local repo. Profiles may also extend an equivalent base from a git repo, a local directory, or another local base file. Same schema as profile files, minus the `extends` field.
 
 ```yaml
 vars:
@@ -96,7 +96,13 @@ configs:
 ### 3.3 Profile files (profiles/*.yaml)
 
 ```yaml
-extends: base                    # required, must be "base" (only value allowed in v1)
+extends: ./base.yaml
+# or:
+# extends: https://github.com/me/personal-dotfiles.git
+# extends: https://github.com/me/personal-dotfiles.git@main
+# extends: git@github.com:me/personal-dotfiles.git@v1.2.0
+# extends: /Users/me/personal-dotfiles
+# extends: /Users/me/personal-dotfiles/base.yaml
 
 vars:
   git_email: sarah@acme.com
@@ -110,7 +116,7 @@ configs:
   ~/.npmrc: configs/work/.npmrc           # adds new config
 ```
 
-`extends` is validated strictly — any value other than `"base"` is a fatal error. Future versions may allow chaining.
+`extends` is a locator string. Supported forms in v1 are HTTPS git, SSH git, local directory, and local base file. Git locators may include an optional `@ref` suffix for branch, tag, or commit. Omitting the ref uses the remote default branch.
 
 ### 3.4 .local.yaml
 
@@ -190,7 +196,7 @@ Any `${facet:var_name}` referencing an undefined variable is a **fatal error**. 
 
 ## 5. Merge Rules
 
-Three layers are merged in order: `base.yaml` → `profiles/<name>.yaml` → `.local.yaml`. Later layers win on conflicts.
+Three layers are merged in order: resolved base from `extends` → `profiles/<name>.yaml` → `.local.yaml`. Later layers win on conflicts.
 
 ### 5.1 vars — deep merge, last writer wins per leaf key
 
@@ -262,7 +268,7 @@ This is **environment variable expansion**, not `${facet:...}` substitution. The
 
 ### Source path constraints
 
-Source paths are relative to the config directory. Paths that escape the config directory (via `../` traversal or absolute paths) are rejected with a fatal error. All config sources must live within the config repo.
+Source paths are resolved relative to the owning source root for the layer that defined them. Local profiles use the config directory. Local base files use the directory containing that file. Git-based bases use the temporary clone root and must use relative source paths rooted inside that clone. Relative paths that escape the owning source root are rejected with a fatal error. Absolute paths are allowed after variable substitution only for local layers.
 
 ### Deploy strategy (auto-detected)
 
@@ -271,13 +277,14 @@ Source paths are relative to the config directory. Paths that escape the config 
 | File | No | Symlink target → source |
 | File | Yes | Substitute variables, write rendered content as regular file |
 | Directory | N/A | Symlink target → source |
+| File or directory from a git-based base without `${facet:` | N/A | Copy target contents into place |
 
-Facet reads every source file to check for `${facet:`. Directories are always symlinked.
+Facet reads every source file to check for `${facet:`. Directories are symlinked for local sources and copied for git-based bases.
 
 ### Symlink behavior
 
 1. Symlink exists, points to correct source → no-op
-2. Symlink exists, points to wrong source → unapply removes it, apply creates new one
+2. Symlink exists, points to wrong source → replace it only when facet can verify ownership or when `--force` is set
 3. Regular file exists at target → prompt user to replace. With `--force`, replace without asking.
 4. Target doesn't exist → create symlink, creating parent directories as needed (`mkdir -p`)
 
@@ -343,8 +350,9 @@ Profile switching is: **unapply the current profile, then apply the new one.**
 - Does NOT uninstall packages
 
 **Apply** deploys the new profile:
+- Resolves the base from `extends`
 - Runs all package install commands
-- Deploys all config files (symlink or template)
+- Deploys all config files (symlink, template, or copy)
 - Writes new `.state.json`
 
 ### Same-profile reapply
@@ -360,7 +368,7 @@ Running `facet apply <same-profile>` just applies — overwrites configs to conv
 `--dry-run` runs the full load → merge → resolve pipeline (steps 1–7), catching any YAML, profile, or variable errors, then prints what would happen without making any changes:
 
 - Packages that would be installed (with per-OS command resolution)
-- Configs that would be deployed (with auto-detected strategy — symlink vs template)
+- Configs that would be deployed (with auto-detected strategy — symlink, template, or copy)
 - Configs that would be removed (if switching profiles or using `--force`)
 
 No side effects — no package installs, no symlinks, no file writes, no state changes. Steps 8–11 are skipped entirely.
@@ -375,8 +383,8 @@ Changes config deployment failure behavior from rollback to warn-and-continue (s
 |---|---|
 | 1. Find config dir | Fatal |
 | 2. Load facet.yaml | Fatal |
-| 3. Load base.yaml | Fatal |
-| 4. Load profiles/<name>.yaml | Fatal |
+| 3. Load profiles/<name>.yaml | Fatal |
+| 4. Resolve the base from `extends` | Fatal |
 | 5. Load .local.yaml | Fatal if missing |
 | 6. Merge layers | Fatal on type conflicts |
 | 7. Resolve ${facet:...} | Fatal on undefined var |
@@ -419,7 +427,7 @@ Error if `facet.yaml` already exists in the current directory.
 
 ### facet apply \<profile\>
 
-Applies a profile. See Section 8 for the full apply model.
+Applies a profile. See Section 8 for the full apply model. The base from `extends` is resolved before merge, and git-based bases are cloned fresh for each apply then cleaned up afterward.
 
 **Flags:**
 - `--dry-run` — preview what would happen without making changes
@@ -437,11 +445,12 @@ Reads `.state.json` and displays the current state with validity checks.
 **Output includes:**
 - Active profile name and when it was last applied
 - List of packages with their install commands and status (ok/failed)
-- List of configs with target path, source path, strategy (symlink/template), and current validity (symlink still valid, file still exists)
+- List of configs with target path, source path, strategy (symlink/template/copy), and current validity (symlink still valid, file or directory still exists with the expected type)
 
 **Validity checks** (always run, but cleanly encapsulated for future refactoring):
 - Are all symlinks still pointing to the correct source?
 - Do all templated files still exist at the target path?
+- Do copied remote-base files still exist at the target path?
 
 If no profile has been applied (no `.state.json`), print a message suggesting `facet apply <profile>`.
 
@@ -492,5 +501,5 @@ for the affected agents before recording the new state.
 | Default profile | Profile argument always required for `facet apply` |
 | Template logic (if/else/loops) | Just `${facet:...}` substitution |
 | Recursive var resolution | Var values containing `${facet:...}` are literal |
-| Multi-level extends | Only `extends: base` supported |
+| Multi-level extends | Single base locator only; no chained inheritance |
 | Windows support | macOS and Linux only |

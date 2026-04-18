@@ -61,7 +61,10 @@ func runValidityChecks(s *ApplyState, cfgDir string) []ValidityCheck {
 					check.Valid = false
 					check.Error = "symlink target does not exist (broken symlink)"
 				} else if cfgDir != "" {
-					expectedSource := filepath.Join(cfgDir, cfg.Source)
+					expectedSource := cfg.SourcePath
+					if expectedSource == "" {
+						expectedSource = filepath.Join(cfgDir, cfg.Source)
+					}
 					if symlinkTarget != expectedSource {
 						check.Valid = false
 						check.Error = fmt.Sprintf("symlink points to wrong source: got %s, want %s", symlinkTarget, expectedSource)
@@ -72,8 +75,19 @@ func runValidityChecks(s *ApplyState, cfgDir string) []ValidityCheck {
 					check.Valid = true
 				}
 			}
-		case deploy.StrategyTemplate:
-			check.Valid = true
+		case deploy.StrategyTemplate, deploy.StrategyCopy:
+			if info.Mode()&os.ModeSymlink != 0 {
+				check.Valid = false
+				check.Error = "expected regular file or directory, found symlink"
+			} else if cfg.IsDir && !info.IsDir() {
+				check.Valid = false
+				check.Error = "expected directory, found file"
+			} else if !cfg.IsDir && info.IsDir() {
+				check.Valid = false
+				check.Error = "expected file, found directory"
+			} else {
+				check.Valid = true
+			}
 		default:
 			check.Valid = true
 		}

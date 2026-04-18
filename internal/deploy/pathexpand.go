@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"facet/internal/profile"
 )
 
 var envVarPattern = regexp.MustCompile(`\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}|\$([a-zA-Z_][a-zA-Z0-9_]*)`)
@@ -64,27 +66,50 @@ func ExpandPath(path string) (string, error) {
 	return filepath.Clean(expanded), nil
 }
 
-// ValidateSourcePath checks that a source path is relative and stays within the config directory.
-func ValidateSourcePath(source, configDir string) error {
+type SourceSpec struct {
+	DisplaySource string
+	ResolvedPath  string
+	Materialize   bool
+	SourceRoot    string
+}
+
+func ResolveSourcePath(source string, meta profile.ConfigProvenance, localConfigDir string) (SourceSpec, error) {
+	root := meta.SourceRoot
+	if root == "" {
+		root = localConfigDir
+	}
+
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return SourceSpec{}, fmt.Errorf("cannot resolve source root: %w", err)
+	}
+
 	if filepath.IsAbs(source) {
-		return fmt.Errorf("config source path must be relative to the config directory, got absolute path: %q", source)
+		if meta.Materialize {
+			return SourceSpec{}, fmt.Errorf("config source path %q must be relative for git-based bases", source)
+		}
+		return SourceSpec{
+			DisplaySource: source,
+			ResolvedPath:  filepath.Clean(source),
+			Materialize:   meta.Materialize,
+			SourceRoot:    absRoot,
+		}, nil
 	}
 
-	// Resolve the full path and check it's within configDir
-	full := filepath.Join(configDir, source)
-	resolved, err := filepath.Abs(full)
+	resolved := filepath.Join(root, source)
+	absResolved, err := filepath.Abs(resolved)
 	if err != nil {
-		return fmt.Errorf("cannot resolve source path %q: %w", source, err)
+		return SourceSpec{}, fmt.Errorf("cannot resolve source path %q: %w", source, err)
 	}
 
-	absConfigDir, err := filepath.Abs(configDir)
-	if err != nil {
-		return fmt.Errorf("cannot resolve config directory: %w", err)
+	if !strings.HasPrefix(absResolved, absRoot+string(filepath.Separator)) && absResolved != absRoot {
+		return SourceSpec{}, fmt.Errorf("config source path %q escapes source root %s", source, absRoot)
 	}
 
-	if !strings.HasPrefix(resolved, absConfigDir+string(filepath.Separator)) && resolved != absConfigDir {
-		return fmt.Errorf("config source path %q escapes the config directory (resolves to %s, outside %s)", source, resolved, absConfigDir)
-	}
-
-	return nil
+	return SourceSpec{
+		DisplaySource: source,
+		ResolvedPath:  absResolved,
+		Materialize:   meta.Materialize,
+		SourceRoot:    absRoot,
+	}, nil
 }

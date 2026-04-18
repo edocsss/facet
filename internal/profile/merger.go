@@ -21,6 +21,7 @@ func Merge(base, overlay *FacetConfig) (*FacetConfig, error) {
 
 	// Merge configs (shallow merge, overlay wins on same target)
 	result.Configs = mergeConfigs(base.Configs, overlay.Configs)
+	result.ConfigMeta = mergeConfigMeta(base.ConfigMeta, overlay.ConfigMeta)
 
 	// Merge AI config
 	result.AI = mergeAI(base.AI, overlay.AI)
@@ -44,14 +45,14 @@ func deepMergeVars(base, overlay map[string]any) (map[string]any, error) {
 
 	// Copy base
 	for k, v := range base {
-		result[k] = v
+		result[k] = cloneValue(v)
 	}
 
 	// Merge overlay
 	for k, v := range overlay {
 		existing, exists := result[k]
 		if !exists {
-			result[k] = v
+			result[k] = cloneValue(v)
 			continue
 		}
 
@@ -68,7 +69,7 @@ func deepMergeVars(base, overlay map[string]any) (map[string]any, error) {
 			return nil, fmt.Errorf("type conflict for var '%s': cannot merge map and scalar", k)
 		} else {
 			// Both are scalars — overlay wins
-			result[k] = v
+			result[k] = cloneValue(v)
 		}
 	}
 
@@ -90,14 +91,14 @@ func mergePackages(base, overlay []PackageEntry) []PackageEntry {
 	var order []string
 
 	for _, p := range base {
-		byName[p.Name] = p
+		byName[p.Name] = clonePackageEntry(p)
 		order = append(order, p.Name)
 	}
 	for _, p := range overlay {
 		if _, exists := byName[p.Name]; !exists {
 			order = append(order, p.Name)
 		}
-		byName[p.Name] = p
+		byName[p.Name] = clonePackageEntry(p)
 	}
 
 	result := make([]PackageEntry, 0, len(order))
@@ -122,6 +123,20 @@ func mergeConfigs(base, overlay map[string]string) map[string]string {
 	return result
 }
 
+func mergeConfigMeta(base, overlay map[string]ConfigProvenance) map[string]ConfigProvenance {
+	if base == nil && overlay == nil {
+		return nil
+	}
+	result := make(map[string]ConfigProvenance)
+	for k, v := range base {
+		result[k] = v
+	}
+	for k, v := range overlay {
+		result[k] = v
+	}
+	return result
+}
+
 // mergeScripts concatenates base scripts followed by overlay scripts.
 // No deduplication — if both layers define a script with the same name, both run.
 func mergeScripts(base, overlay []ScriptEntry) []ScriptEntry {
@@ -130,10 +145,79 @@ func mergeScripts(base, overlay []ScriptEntry) []ScriptEntry {
 	}
 	result := make([]ScriptEntry, 0, len(base)+len(overlay))
 	for _, script := range base {
-		result = append(result, ScriptEntry{Name: script.Name, Run: script.Run})
+		result = append(result, ScriptEntry{Name: script.Name, Run: script.Run, WorkDir: script.WorkDir})
 	}
 	for _, script := range overlay {
-		result = append(result, ScriptEntry{Name: script.Name, Run: script.Run})
+		result = append(result, ScriptEntry{Name: script.Name, Run: script.Run, WorkDir: script.WorkDir})
 	}
 	return result
+}
+
+func AnnotateLayer(cfg *FacetConfig, sourceRoot string, materialize bool) {
+	if cfg == nil {
+		return
+	}
+	if cfg.ConfigMeta == nil {
+		cfg.ConfigMeta = make(map[string]ConfigProvenance, len(cfg.Configs))
+	}
+	for target := range cfg.Configs {
+		cfg.ConfigMeta[target] = ConfigProvenance{
+			SourceRoot:  sourceRoot,
+			Materialize: materialize,
+		}
+	}
+	for i := range cfg.PreApply {
+		cfg.PreApply[i].WorkDir = sourceRoot
+	}
+	for i := range cfg.PostApply {
+		cfg.PostApply[i].WorkDir = sourceRoot
+	}
+}
+
+func clonePackageEntry(p PackageEntry) PackageEntry {
+	return PackageEntry{
+		Name:    p.Name,
+		Check:   cloneInstallCmd(p.Check),
+		Install: cloneInstallCmd(p.Install),
+	}
+}
+
+func cloneInstallCmd(cmd InstallCmd) InstallCmd {
+	result := InstallCmd{Command: cmd.Command}
+	if cmd.PerOS != nil {
+		result.PerOS = make(map[string]string, len(cmd.PerOS))
+		for k, v := range cmd.PerOS {
+			result.PerOS[k] = v
+		}
+	}
+	return result
+}
+
+func cloneValue(v any) any {
+	switch value := v.(type) {
+	case nil:
+		return nil
+	case map[string]any:
+		result := make(map[string]any, len(value))
+		for k, inner := range value {
+			result[k] = cloneValue(inner)
+		}
+		return result
+	case []any:
+		result := make([]any, len(value))
+		for i, inner := range value {
+			result[i] = cloneValue(inner)
+		}
+		return result
+	default:
+		return value
+	}
+}
+
+func cloneVars(vars map[string]any) map[string]any {
+	if vars == nil {
+		return nil
+	}
+	cloned, _ := cloneValue(vars).(map[string]any)
+	return cloned
 }

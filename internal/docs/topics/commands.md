@@ -41,7 +41,7 @@ Valid stages (in execution order):
 
 | Stage | Description |
 |-------|-------------|
-| `configs` | Deploy symlinks and templates |
+| `configs` | Deploy symlinks, templates, and copied remote-base configs |
 | `pre_apply` | Run pre_apply scripts |
 | `packages` | Install packages |
 | `post_apply` | Run post_apply scripts |
@@ -49,7 +49,7 @@ Valid stages (in execution order):
 
 What it does:
 
-1. Loads `facet.yaml`, `base.yaml`, the selected profile, and `.local.yaml`
+1. Loads `facet.yaml`, the selected profile, resolves its base from `extends`, and loads `.local.yaml`
 2. Merges the three layers
 3. Resolves `${facet:...}` variables
 4. Unapplies previous state if switching profiles or using `--force`

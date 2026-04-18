@@ -3,6 +3,7 @@ package app
 // Deps holds all dependencies for the App.
 type Deps struct {
 	Loader          ProfileLoader
+	BaseResolver    BaseResolver
 	Installer       Installer
 	Reporter        Reporter
 	StateStore      StateStore
@@ -17,6 +18,7 @@ type Deps struct {
 // App is the application service layer that orchestrates all facet operations.
 type App struct {
 	loader          ProfileLoader
+	baseResolver    BaseResolver
 	installer       Installer
 	reporter        Reporter
 	stateStore      StateStore
@@ -32,6 +34,7 @@ type App struct {
 func New(deps Deps) *App {
 	return &App{
 		loader:          deps.Loader,
+		baseResolver:    deps.BaseResolver,
 		installer:       deps.Installer,
 		reporter:        deps.Reporter,
 		stateStore:      deps.StateStore,

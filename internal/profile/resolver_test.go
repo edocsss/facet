@@ -401,3 +401,42 @@ func TestResolve_ScriptDeepCopy(t *testing.T) {
 	resolved.PreApply[0].Run = "mutated"
 	assert.Equal(t, "echo ${facet:name}", cfg.PreApply[0].Run)
 }
+
+func TestResolve_ConfigMetaPreserved(t *testing.T) {
+	cfg := &FacetConfig{
+		Vars: map[string]any{"env": "work"},
+		Configs: map[string]string{
+			"~/.gitconfig": "configs/${facet:env}/.gitconfig",
+		},
+		ConfigMeta: map[string]ConfigProvenance{
+			"~/.gitconfig": {SourceRoot: "/remote", Materialize: true},
+		},
+	}
+
+	resolved, err := Resolve(cfg)
+	require.NoError(t, err)
+	assert.Equal(t, ConfigProvenance{SourceRoot: "/remote", Materialize: true}, resolved.ConfigMeta["~/.gitconfig"])
+
+	resolved.ConfigMeta["~/.gitconfig"] = ConfigProvenance{SourceRoot: "/mutated", Materialize: false}
+	assert.Equal(t, ConfigProvenance{SourceRoot: "/remote", Materialize: true}, cfg.ConfigMeta["~/.gitconfig"])
+}
+
+func TestResolve_ScriptsPreserveWorkDir(t *testing.T) {
+	cfg := &FacetConfig{
+		Vars: map[string]any{"name": "Sarah"},
+		PreApply: []ScriptEntry{
+			{Name: "pre", Run: "echo ${facet:name}", WorkDir: "/remote"},
+		},
+		PostApply: []ScriptEntry{
+			{Name: "post", Run: "printf '%s' ${facet:name}", WorkDir: "/local"},
+		},
+	}
+
+	resolved, err := Resolve(cfg)
+	require.NoError(t, err)
+	require.Len(t, resolved.PreApply, 1)
+	require.Len(t, resolved.PostApply, 1)
+	assert.Equal(t, "echo Sarah", resolved.PreApply[0].Run)
+	assert.Equal(t, "/remote", resolved.PreApply[0].WorkDir)
+	assert.Equal(t, "/local", resolved.PostApply[0].WorkDir)
+}
