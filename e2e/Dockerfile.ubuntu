@@ -1,0 +1,34 @@
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    jq \
+    sudo \
+    && rm -rf /var/lib/apt/lists/*
+
+# Non-root test user
+RUN useradd -m -s /bin/bash testuser \
+    && echo "testuser ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+RUN mkdir -p /opt/e2e
+
+# Copy test infrastructure first — changes less often, so this layer stays cached
+# even when only the facet binary is rebuilt.
+COPY fixtures/ /opt/e2e/fixtures/
+COPY suites/ /opt/e2e/suites/
+COPY harness.sh /opt/e2e/harness.sh
+RUN chmod +x /opt/e2e/harness.sh /opt/e2e/suites/*.sh /opt/e2e/fixtures/*.sh
+
+# Copy the facet binary LAST — this is the layer that changes on every rebuild.
+COPY facet-linux /usr/local/bin/facet
+RUN chmod +x /usr/local/bin/facet
+
+ENV SUITE_DIR=/opt/e2e/suites
+ENV FIXTURE_DIR=/opt/e2e/fixtures
+
+USER testuser
+WORKDIR /home/testuser
+
+ENTRYPOINT ["/opt/e2e/harness.sh"]
