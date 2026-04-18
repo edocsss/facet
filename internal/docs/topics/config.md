@@ -43,7 +43,7 @@ min_version: "0.1.0"
 
 ## `base.yaml`
 
-Shared configuration that every profile extends.
+Shared configuration that profiles can extend locally, or replicate in another directory or git repo.
 
 ```yaml
 vars:
@@ -63,7 +63,7 @@ configs:
 ## `profiles/<name>.yaml`
 
 ```yaml
-extends: base
+extends: ./base.yaml
 
 vars:
   git_email: sarah@work.com
@@ -77,7 +77,14 @@ configs:
   ~/.npmrc: configs/work/.npmrc
 ```
 
-`extends` must be exactly `base`.
+`extends` is a locator string. Supported forms include:
+
+- `base.yaml`
+- `shared/base.yaml`
+- `./shared-config`
+- `https://github.com/me/personal-dotfiles.git`
+- `https://github.com/me/personal-dotfiles.git@main`
+- `git@github.com:me/personal-dotfiles.git@v1.2.0`
 
 ## `.local.yaml`
 
@@ -95,7 +102,7 @@ All config layers use this schema:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `extends` | string | Profile files only. Must be `base`. |
+| `extends` | string | Profile files only. Base locator. Supports local files, local directories, and git locators. |
 | `vars` | map[string]any | Variables used by `${facet:...}` substitution. Supports nested maps. |
 | `packages` | list of PackageEntry | Package install entries (with optional `check`). See `facet docs packages`. |
 | `configs` | map[string]string | Target path to source path. See `facet docs deploy`. |

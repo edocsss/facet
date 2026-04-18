@@ -13,8 +13,9 @@ var facetVarPattern = regexp.MustCompile(`\$\{facet:([a-zA-Z0-9_.]+)\}`)
 // Returns a new FacetConfig with all references substituted.
 func Resolve(cfg *FacetConfig) (*FacetConfig, error) {
 	result := &FacetConfig{
-		Vars:    cfg.Vars, // vars themselves are not resolved (no recursion)
-		Configs: make(map[string]string, len(cfg.Configs)),
+		Vars:       cloneVars(cfg.Vars), // vars themselves are not resolved (no recursion)
+		Configs:    make(map[string]string, len(cfg.Configs)),
+		ConfigMeta: mergeConfigMeta(nil, cfg.ConfigMeta),
 	}
 
 	// Resolve packages
@@ -49,8 +50,9 @@ func Resolve(cfg *FacetConfig) (*FacetConfig, error) {
 				return nil, fmt.Errorf("pre_apply[%d] %q: %w", i, script.Name, err)
 			}
 			result.PreApply[i] = ScriptEntry{
-				Name: script.Name,
-				Run:  resolvedRun,
+				Name:    script.Name,
+				Run:     resolvedRun,
+				WorkDir: script.WorkDir,
 			}
 		}
 	}
@@ -63,8 +65,9 @@ func Resolve(cfg *FacetConfig) (*FacetConfig, error) {
 				return nil, fmt.Errorf("post_apply[%d] %q: %w", i, script.Name, err)
 			}
 			result.PostApply[i] = ScriptEntry{
-				Name: script.Name,
-				Run:  resolvedRun,
+				Name:    script.Name,
+				Run:     resolvedRun,
+				WorkDir: script.WorkDir,
 			}
 		}
 	}

@@ -38,7 +38,7 @@ If you have no secrets yet, keep the file empty or leave only comments in it.
 Create `profiles/work.yaml`:
 
 ```yaml
-extends: base
+extends: ./base.yaml
 
 vars:
   git_email: you@company.com
@@ -51,7 +51,7 @@ configs:
   ~/.gitconfig: configs/work/.gitconfig
 ```
 
-`extends: base` is required.
+You can also point `extends` at a local directory, another `base.yaml`, or a git repo. `base.yaml` is the simplest local form when your shared base lives in the same config repo.
 
 ## 4. Apply
 
@@ -59,9 +59,9 @@ configs:
 facet apply work
 ```
 
-This loads `base.yaml`, your profile, and `.local.yaml`, merges them, resolves
-variables, deploys config files, runs scripts, installs packages, applies any AI
-settings, and writes state to `~/.facet/.state.json`.
+This resolves the base from `extends`, then loads your profile and `.local.yaml`, merges
+them, resolves variables, deploys config files, runs scripts, installs packages,
+applies any AI settings, and writes state to `~/.facet/.state.json`.
 
 Run `facet status` to inspect the applied state.
 

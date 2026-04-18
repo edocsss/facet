@@ -55,8 +55,33 @@ assert_file_not_exists "$HOME/.facet-base-pre-ran"
 assert_file_not_exists "$HOME/.facet-base-post-ran"
 echo "  --stages packages skips scripts"
 
+# Test: --stages packages does not clean up configs from skipped config stage
+facet_apply work
+assert_file_exists "$HOME/.npmrc"
+assert_symlink "$HOME/.npmrc"
+cat > "$HOME/dotfiles/profiles/work.yaml" << 'YAML'
+extends: base
+
+vars:
+  git:
+    email: sarah@acme.com
+
+packages:
+  - name: docker
+    install: brew install docker
+  - name: node
+    install:
+      macos: brew install node
+      linux: sudo apt-get install -y nodejs
+YAML
+facet -c "$HOME/dotfiles" -s "$HOME/.facet" apply work --stages packages
+assert_file_exists "$HOME/.npmrc"
+assert_symlink "$HOME/.npmrc"
+echo "  --stages packages leaves existing configs untouched"
+
 # Test: --stages runs only selected stages
-rm -f "$HOME/.facet-base-pre-ran" "$HOME/.facet-work-pre-ran"
+setup_basic
+rm -f "$HOME/.facet-base-pre-ran" "$HOME/.facet-work-pre-ran" "$HOME/.facet-base-post-ran" "$HOME/.facet-work-post-ran"
 
 facet -c "$HOME/dotfiles" -s "$HOME/.facet" apply work --force --stages pre_apply
 assert_file_exists "$HOME/.facet-base-pre-ran"

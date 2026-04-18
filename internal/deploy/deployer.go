@@ -1,7 +1,10 @@
 package deploy
 
 import (
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,18 +16,21 @@ import (
 const (
 	StrategySymlink  = "symlink"
 	StrategyTemplate = "template"
+	StrategyCopy     = "copy"
 )
 
 // ConfigResult records a single deployed config.
 type ConfigResult struct {
-	Target   string `json:"target"`
-	Source   string `json:"source"`
-	Strategy string `json:"strategy"` // StrategySymlink or StrategyTemplate
+	Target     string `json:"target"`
+	Source     string `json:"source"`
+	SourcePath string `json:"source_path,omitempty"`
+	IsDir      bool   `json:"is_dir,omitempty"`
+	Strategy   string `json:"strategy"` // StrategySymlink, StrategyTemplate, or StrategyCopy
 }
 
 // Service is the interface for deployment operations.
 type Service interface {
-	DeployOne(targetPath, source string, force bool) (ConfigResult, error)
+	DeployOne(targetPath string, source SourceSpec, force bool) (ConfigResult, error)
 	Unapply(configs []ConfigResult) error
 	Rollback() error
 	Deployed() []ConfigResult
@@ -35,17 +41,17 @@ type Deployer struct {
 	configDir    string
 	homeDir      string
 	vars         map[string]any
-	deployed     []ConfigResult     // tracks deployments for rollback
-	ownedTargets map[string]bool    // targets that were managed by facet in a previous run
+	deployed     []ConfigResult          // tracks deployments for rollback
+	ownedTargets map[string]ConfigResult // targets that were managed by facet in a previous run
 }
 
 // NewDeployer creates a new Deployer.
 // ownedConfigs is the list of configs from a previous apply run (used to identify
 // facet-owned files that can be overwritten without --force).
 func NewDeployer(configDir, homeDir string, vars map[string]any, ownedConfigs []ConfigResult) *Deployer {
-	owned := make(map[string]bool, len(ownedConfigs))
+	owned := make(map[string]ConfigResult, len(ownedConfigs))
 	for _, c := range ownedConfigs {
-		owned[c.Target] = true
+		owned[c.Target] = c
 	}
 	return &Deployer{
 		configDir:    configDir,
@@ -61,13 +67,16 @@ func (d *Deployer) Deployed() []ConfigResult {
 }
 
 // DetectStrategy determines whether a source path should be symlinked or templated.
-func DetectStrategy(sourcePath string) (string, error) {
+func DetectStrategy(sourcePath string, materialize bool) (string, error) {
 	info, err := os.Stat(sourcePath)
 	if err != nil {
 		return "", fmt.Errorf("cannot stat source %q: %w", sourcePath, err)
 	}
 
 	if info.IsDir() {
+		if materialize {
+			return StrategyCopy, nil
+		}
 		return StrategySymlink, nil
 	}
 
@@ -80,6 +89,10 @@ func DetectStrategy(sourcePath string) (string, error) {
 		return StrategyTemplate, nil
 	}
 
+	if materialize {
+		return StrategyCopy, nil
+	}
+
 	return StrategySymlink, nil
 }
 
@@ -87,15 +100,26 @@ func DetectStrategy(sourcePath string) (string, error) {
 // targetPath is the absolute expanded target path.
 // source is the relative source path within the config directory.
 // force replaces existing non-facet files without prompting.
-func (d *Deployer) DeployOne(targetPath, source string, force bool) (ConfigResult, error) {
-	sourcePath := filepath.Join(d.configDir, source)
+func (d *Deployer) DeployOne(targetPath string, source SourceSpec, force bool) (ConfigResult, error) {
+	sourcePath := source.ResolvedPath
 	result := ConfigResult{
-		Target: targetPath,
-		Source: source,
+		Target:     targetPath,
+		Source:     source.DisplaySource,
+		SourcePath: source.ResolvedPath,
 	}
+	if source.Materialize {
+		if err := validateMaterializedSource(source.ResolvedPath, source.SourceRoot); err != nil {
+			return result, err
+		}
+	}
+	sourceInfo, err := os.Stat(sourcePath)
+	if err != nil {
+		return result, fmt.Errorf("cannot stat source %q: %w", sourcePath, err)
+	}
+	result.IsDir = sourceInfo.IsDir()
 
 	// Detect strategy
-	strategy, err := DetectStrategy(sourcePath)
+	strategy, err := DetectStrategy(sourcePath, source.Materialize)
 	if err != nil {
 		return result, err
 	}
@@ -118,16 +142,34 @@ func (d *Deployer) DeployOne(targetPath, source string, force bool) (ConfigResul
 				d.deployed = append(d.deployed, result)
 				return result, nil
 			}
-			// Wrong target or different strategy — remove and re-create
+			if !force {
+				ownedConfig, isOwnedByFacet := d.ownedTargets[targetPath]
+				if !isOwnedByFacet || ownedConfig.Strategy != StrategySymlink {
+					return result, fmt.Errorf("target %s already exists as a symlink and is not managed by facet — use --force to replace", targetPath)
+				}
+
+				expectedTarget := d.expectedSymlinkTarget(ownedConfig)
+				if currentTarget != expectedTarget {
+					return result, fmt.Errorf("refusing to replace unmanaged symlink %s: current target %s does not match recorded source %s", targetPath, currentTarget, expectedTarget)
+				}
+			}
+
 			if err := os.Remove(targetPath); err != nil {
 				return result, fmt.Errorf("cannot remove existing symlink %s: %w", targetPath, err)
 			}
 		} else {
 			// Regular file or directory exists
-			isOwnedByFacet := d.ownedTargets[targetPath]
+			ownedConfig, isOwnedByFacet := d.ownedTargets[targetPath]
 			if isOwnedByFacet {
 				// File was previously managed by facet — overwrite it
-				if err := os.Remove(targetPath); err != nil {
+				if existingInfo.IsDir() && !ownedConfig.IsDir {
+					return result, fmt.Errorf("refusing to remove unexpected directory at %s for previously file-managed target", targetPath)
+				}
+				removeFn := os.Remove
+				if existingInfo.IsDir() {
+					removeFn = os.RemoveAll
+				}
+				if err := removeFn(targetPath); err != nil {
 					return result, fmt.Errorf("cannot remove existing file %s: %w", targetPath, err)
 				}
 			} else if force {
@@ -154,7 +196,7 @@ func (d *Deployer) DeployOne(targetPath, source string, force bool) (ConfigResul
 		}
 		rendered, err := profile.SubstituteVars(string(content), d.vars)
 		if err != nil {
-			return result, fmt.Errorf("template rendering failed for %s: %w", source, err)
+			return result, fmt.Errorf("template rendering failed for %s: %w", source.DisplaySource, err)
 		}
 		// Preserve source file permissions
 		sourceInfo, err := os.Stat(sourcePath)
@@ -163,6 +205,10 @@ func (d *Deployer) DeployOne(targetPath, source string, force bool) (ConfigResul
 		}
 		if err := os.WriteFile(targetPath, []byte(rendered), sourceInfo.Mode()); err != nil {
 			return result, fmt.Errorf("cannot write rendered template to %s: %w", targetPath, err)
+		}
+	case StrategyCopy:
+		if err := copyPath(sourcePath, targetPath); err != nil {
+			return result, err
 		}
 	}
 
@@ -173,7 +219,50 @@ func (d *Deployer) DeployOne(targetPath, source string, force bool) (ConfigResul
 // Unapply removes previously deployed configs based on state records.
 func (d *Deployer) Unapply(configs []ConfigResult) error {
 	for _, cfg := range configs {
-		if err := os.Remove(cfg.Target); err != nil && !os.IsNotExist(err) {
+		info, err := os.Lstat(cfg.Target)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("cannot inspect %s during unapply: %w", cfg.Target, err)
+		}
+
+		if cfg.Strategy == StrategySymlink {
+			if info.Mode()&os.ModeSymlink == 0 {
+				return fmt.Errorf("refusing to remove non-symlink at %s for previously symlink-managed target", cfg.Target)
+			}
+
+			currentTarget, err := os.Readlink(cfg.Target)
+			if err != nil {
+				return fmt.Errorf("cannot read symlink target %s during unapply: %w", cfg.Target, err)
+			}
+
+			expectedTarget := d.expectedSymlinkTarget(cfg)
+			if expectedTarget != "" && currentTarget != expectedTarget {
+				return fmt.Errorf("refusing to remove repointed symlink %s: current target %s does not match recorded source %s", cfg.Target, currentTarget, expectedTarget)
+			}
+
+			if err := os.Remove(cfg.Target); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("cannot remove %s during unapply: %w", cfg.Target, err)
+			}
+			continue
+		}
+
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to remove unexpected symlink at %s for previously non-symlink-managed target", cfg.Target)
+		}
+
+		if info.IsDir() {
+			if !cfg.IsDir {
+				return fmt.Errorf("refusing to remove unexpected directory at %s for previously file-managed target", cfg.Target)
+			}
+			if err := os.RemoveAll(cfg.Target); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("cannot remove %s during unapply: %w", cfg.Target, err)
+			}
+			continue
+		}
+
+		if err := os.Remove(cfg.Target); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("cannot remove %s during unapply: %w", cfg.Target, err)
 		}
 	}
@@ -183,4 +272,121 @@ func (d *Deployer) Unapply(configs []ConfigResult) error {
 // Rollback removes all configs deployed during this session.
 func (d *Deployer) Rollback() error {
 	return d.Unapply(d.deployed)
+}
+
+func (d *Deployer) expectedSymlinkTarget(cfg ConfigResult) string {
+	if cfg.SourcePath != "" {
+		return filepath.Clean(cfg.SourcePath)
+	}
+	if cfg.Source == "" {
+		return ""
+	}
+	return filepath.Clean(filepath.Join(d.configDir, cfg.Source))
+}
+
+func validateMaterializedSource(sourcePath, sourceRoot string) error {
+	if sourceRoot == "" {
+		return nil
+	}
+
+	realRoot, err := filepath.EvalSymlinks(sourceRoot)
+	if err != nil {
+		return fmt.Errorf("cannot resolve source root %q: %w", sourceRoot, err)
+	}
+
+	return filepath.WalkDir(sourcePath, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+
+		realPath, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return fmt.Errorf("cannot resolve materialized source %q: %w", path, err)
+		}
+		if !isWithinRoot(realPath, realRoot) {
+			return fmt.Errorf("materialized source %q escapes source root %s", path, realRoot)
+		}
+
+		if d.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("materialized source %q must not contain symlinks", path)
+		}
+		return nil
+	})
+}
+
+func isWithinRoot(path, root string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+func copyPath(sourcePath, targetPath string) error {
+	info, err := os.Stat(sourcePath)
+	if err != nil {
+		return fmt.Errorf("cannot stat source %q: %w", sourcePath, err)
+	}
+
+	if info.IsDir() {
+		return copyDir(sourcePath, targetPath, info.Mode())
+	}
+	return copyFile(sourcePath, targetPath, info.Mode())
+}
+
+func copyDir(sourceDir, targetDir string, mode os.FileMode) error {
+	if err := os.MkdirAll(targetDir, mode); err != nil {
+		return fmt.Errorf("cannot create target directory %s: %w", targetDir, err)
+	}
+
+	entries, err := os.ReadDir(sourceDir)
+	if err != nil {
+		return fmt.Errorf("cannot read source directory %s: %w", sourceDir, err)
+	}
+
+	for _, entry := range entries {
+		src := filepath.Join(sourceDir, entry.Name())
+		dst := filepath.Join(targetDir, entry.Name())
+
+		if entry.IsDir() {
+			info, err := entry.Info()
+			if err != nil {
+				return fmt.Errorf("cannot stat source directory %s: %w", src, err)
+			}
+			if err := copyDir(src, dst, info.Mode()); err != nil {
+				return err
+			}
+			continue
+		}
+
+		info, err := entry.Info()
+		if err != nil {
+			return fmt.Errorf("cannot stat source file %s: %w", src, err)
+		}
+		if err := copyFile(src, dst, info.Mode()); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func copyFile(sourcePath, targetPath string, mode os.FileMode) error {
+	src, err := os.Open(sourcePath)
+	if err != nil {
+		return fmt.Errorf("cannot open source file %s: %w", sourcePath, err)
+	}
+	defer src.Close()
+
+	dst, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return fmt.Errorf("cannot create target file %s: %w", targetPath, err)
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, src); err != nil {
+		return fmt.Errorf("cannot copy %s to %s: %w", sourcePath, targetPath, err)
+	}
+
+	return nil
 }

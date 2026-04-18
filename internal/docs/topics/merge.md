@@ -5,7 +5,7 @@
 facet merges three layers in order. Later layers win on conflicts.
 
 ```text
-1. base.yaml
+1. resolved base from `extends`
 2. profiles/<name>.yaml
 3. .local.yaml
 ```

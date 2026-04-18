@@ -49,7 +49,7 @@ func createConfigRepo(dir string) error {
 	}
 
 	baseYAML := `# Base configuration — shared across all profiles.
-# Every profile extends this via 'extends: base'.
+# Profiles can extend this with 'extends: ./base.yaml' or another supported locator.
 
 # vars:
 #   git_name: Your Name

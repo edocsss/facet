@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -114,7 +113,8 @@ func (a *App) printDryRun(profileName string, resolved *profile.FacetConfig, opt
 		for _, target := range targets {
 			source := resolved.Configs[target]
 
-			if err := deploy.ValidateSourcePath(source, opts.ConfigDir); err != nil {
+			sourceSpec, err := deploy.ResolveSourcePath(source, resolved.ConfigMeta[target], opts.ConfigDir)
+			if err != nil {
 				a.reporter.Error(fmt.Sprintf("%-30s %s", target, err))
 				continue
 			}
@@ -125,14 +125,13 @@ func (a *App) printDryRun(profileName string, resolved *profile.FacetConfig, opt
 				continue
 			}
 
-			sourcePath := filepath.Join(opts.ConfigDir, source)
-			strategy, err := deploy.DetectStrategy(sourcePath)
+			strategy, err := deploy.DetectStrategy(sourceSpec.ResolvedPath, sourceSpec.Materialize)
 			if err != nil {
 				a.reporter.Error(fmt.Sprintf("%-30s %s", target, err))
 				continue
 			}
 
-			a.reporter.Success(fmt.Sprintf("%-30s → %-30s (%s)", expandedTarget, source, strategy))
+			a.reporter.Success(fmt.Sprintf("%-30s → %-30s (%s)", expandedTarget, sourceSpec.DisplaySource, strategy))
 		}
 	}
 

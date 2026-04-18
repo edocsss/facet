@@ -46,10 +46,10 @@ func (l *Loader) LoadConfig(path string) (*FacetConfig, error) {
 // ValidateProfile checks that a profile config has a valid extends field.
 func ValidateProfile(cfg *FacetConfig) error {
 	if cfg.Extends == "" {
-		return fmt.Errorf("profile is missing 'extends' field (must be 'extends: base')")
+		return fmt.Errorf("profile is missing 'extends' field")
 	}
-	if cfg.Extends != "base" {
-		return fmt.Errorf("profile has 'extends: %s' but only 'extends: base' is supported", cfg.Extends)
+	if _, err := ParseExtends(cfg.Extends); err != nil {
+		return err
 	}
 	return nil
 }

@@ -39,6 +39,7 @@ func main() {
 	deployerFactory := func(configDir, homeDir string, vars map[string]any, ownedConfigs []deploy.ConfigResult) deploy.Service {
 		return deploy.NewDeployer(configDir, homeDir, vars, ownedConfigs)
 	}
+	baseResolver := profile.NewBaseResolver(loader, execrunner.New())
 
 	// Create AI dependencies
 	aiRunner := execrunner.New()
@@ -71,6 +72,7 @@ func main() {
 	// Create app with all dependencies
 	application := app.New(app.Deps{
 		Loader:          loader,
+		BaseResolver:    baseResolver,
 		Installer:       installer,
 		Reporter:        r,
 		StateStore:      stateStore,

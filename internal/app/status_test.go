@@ -103,3 +103,92 @@ func TestRunValidityChecks_FileMissing(t *testing.T) {
 	assert.False(t, checks[0].Valid)
 	assert.Equal(t, "file missing", checks[0].Error)
 }
+
+func TestRunValidityChecks_SymlinkUsesStoredSourcePath(t *testing.T) {
+	homeDir := t.TempDir()
+	sourceRoot := t.TempDir()
+
+	source := filepath.Join(sourceRoot, "configs", ".gitconfig")
+	require.NoError(t, os.MkdirAll(filepath.Dir(source), 0o755))
+	require.NoError(t, os.WriteFile(source, []byte("content"), 0o644))
+
+	target := filepath.Join(homeDir, ".gitconfig")
+	require.NoError(t, os.Symlink(source, target))
+
+	s := &ApplyState{
+		Configs: []deploy.ConfigResult{
+			{
+				Target:     target,
+				Source:     "configs/.gitconfig",
+				SourcePath: source,
+				Strategy:   deploy.StrategySymlink,
+			},
+		},
+	}
+
+	checks := runValidityChecks(s, t.TempDir())
+	require.Len(t, checks, 1)
+	assert.True(t, checks[0].Valid)
+}
+
+func TestRunValidityChecks_CopyDoesNotRequireSource(t *testing.T) {
+	target := filepath.Join(t.TempDir(), ".remote")
+	require.NoError(t, os.WriteFile(target, []byte("remote"), 0o644))
+
+	s := &ApplyState{
+		Configs: []deploy.ConfigResult{
+			{
+				Target:     target,
+				Source:     "configs/.remote",
+				SourcePath: "/tmp/nonexistent-clone/configs/.remote",
+				Strategy:   deploy.StrategyCopy,
+			},
+		},
+	}
+
+	checks := runValidityChecks(s, t.TempDir())
+	require.Len(t, checks, 1)
+	assert.True(t, checks[0].Valid)
+}
+
+func TestRunValidityChecks_CopyFileRejectsDirectoryDrift(t *testing.T) {
+	target := filepath.Join(t.TempDir(), ".remote")
+	require.NoError(t, os.MkdirAll(target, 0o755))
+
+	s := &ApplyState{
+		Configs: []deploy.ConfigResult{
+			{
+				Target:     target,
+				Source:     "configs/.remote",
+				SourcePath: "/tmp/nonexistent-clone/configs/.remote",
+				Strategy:   deploy.StrategyCopy,
+				IsDir:      false,
+			},
+		},
+	}
+
+	checks := runValidityChecks(s, t.TempDir())
+	require.Len(t, checks, 1)
+	assert.False(t, checks[0].Valid)
+}
+
+func TestRunValidityChecks_CopyDirectoryRejectsFileDrift(t *testing.T) {
+	target := filepath.Join(t.TempDir(), ".remote")
+	require.NoError(t, os.WriteFile(target, []byte("remote"), 0o644))
+
+	s := &ApplyState{
+		Configs: []deploy.ConfigResult{
+			{
+				Target:     target,
+				Source:     "configs/remote-dir",
+				SourcePath: "/tmp/nonexistent-clone/configs/remote-dir",
+				Strategy:   deploy.StrategyCopy,
+				IsDir:      true,
+			},
+		},
+	}
+
+	checks := runValidityChecks(s, t.TempDir())
+	require.Len(t, checks, 1)
+	assert.False(t, checks[0].Valid)
+}

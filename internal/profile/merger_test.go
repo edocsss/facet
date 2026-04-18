@@ -284,3 +284,82 @@ func TestMerge_ScriptsDeepCopy(t *testing.T) {
 	assert.Equal(t, "echo base", base.PreApply[0].Run)
 	assert.Equal(t, "echo overlay", overlay.PreApply[0].Run)
 }
+
+func TestAnnotateLayer_SetsConfigMetaAndScriptWorkDirs(t *testing.T) {
+	cfg := &FacetConfig{
+		Configs: map[string]string{
+			"~/.gitconfig": "configs/.gitconfig",
+		},
+		PreApply:  []ScriptEntry{{Name: "pre", Run: "echo pre"}},
+		PostApply: []ScriptEntry{{Name: "post", Run: "echo post"}},
+	}
+
+	AnnotateLayer(cfg, "/tmp/source-root", true)
+
+	assert.Equal(t, ConfigProvenance{
+		SourceRoot:  "/tmp/source-root",
+		Materialize: true,
+	}, cfg.ConfigMeta["~/.gitconfig"])
+	assert.Equal(t, "/tmp/source-root", cfg.PreApply[0].WorkDir)
+	assert.Equal(t, "/tmp/source-root", cfg.PostApply[0].WorkDir)
+}
+
+func TestMerge_ConfigMetaOverlayWins(t *testing.T) {
+	base := &FacetConfig{
+		Configs: map[string]string{
+			"~/.gitconfig": "configs/base/.gitconfig",
+			"~/.zshrc":     "configs/.zshrc",
+		},
+		ConfigMeta: map[string]ConfigProvenance{
+			"~/.gitconfig": {SourceRoot: "/base", Materialize: true},
+			"~/.zshrc":     {SourceRoot: "/base", Materialize: true},
+		},
+	}
+	overlay := &FacetConfig{
+		Configs: map[string]string{
+			"~/.gitconfig": "configs/overlay/.gitconfig",
+		},
+		ConfigMeta: map[string]ConfigProvenance{
+			"~/.gitconfig": {SourceRoot: "/overlay", Materialize: false},
+		},
+	}
+
+	result, err := Merge(base, overlay)
+	require.NoError(t, err)
+	assert.Equal(t, ConfigProvenance{SourceRoot: "/overlay", Materialize: false}, result.ConfigMeta["~/.gitconfig"])
+	assert.Equal(t, ConfigProvenance{SourceRoot: "/base", Materialize: true}, result.ConfigMeta["~/.zshrc"])
+}
+
+func TestMerge_DeepCopiesNestedVars(t *testing.T) {
+	base := &FacetConfig{
+		Vars: map[string]any{
+			"git": map[string]any{
+				"name": "Sarah",
+			},
+		},
+	}
+
+	result, err := Merge(base, &FacetConfig{})
+	require.NoError(t, err)
+
+	resultGit := result.Vars["git"].(map[string]any)
+	resultGit["name"] = "Changed"
+
+	baseGit := base.Vars["git"].(map[string]any)
+	assert.Equal(t, "Sarah", baseGit["name"])
+}
+
+func TestMerge_ScriptsPreserveWorkDir(t *testing.T) {
+	base := &FacetConfig{
+		PreApply: []ScriptEntry{{Name: "base", Run: "echo base", WorkDir: "/base"}},
+	}
+	overlay := &FacetConfig{
+		PreApply: []ScriptEntry{{Name: "overlay", Run: "echo overlay", WorkDir: "/overlay"}},
+	}
+
+	result, err := Merge(base, overlay)
+	require.NoError(t, err)
+	require.Len(t, result.PreApply, 2)
+	assert.Equal(t, "/base", result.PreApply[0].WorkDir)
+	assert.Equal(t, "/overlay", result.PreApply[1].WorkDir)
+}

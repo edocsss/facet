@@ -49,11 +49,23 @@ func (m *mockInstaller) InstallAll(pkgs []profile.PackageEntry) []packages.Packa
 
 type mockDeployer struct {
 	deployed []deploy.ConfigResult
+	sources  []deploy.SourceSpec
+	unapply  [][]deploy.ConfigResult
 	err      error
 }
 
-func (m *mockDeployer) DeployOne(targetPath, source string, force bool) (deploy.ConfigResult, error) {
-	r := deploy.ConfigResult{Target: targetPath, Source: source, Strategy: deploy.StrategySymlink}
+func (m *mockDeployer) DeployOne(targetPath string, source deploy.SourceSpec, force bool) (deploy.ConfigResult, error) {
+	m.sources = append(m.sources, source)
+	strategy := deploy.StrategySymlink
+	if source.Materialize {
+		strategy = deploy.StrategyCopy
+	}
+	r := deploy.ConfigResult{
+		Target:     targetPath,
+		Source:     source.DisplaySource,
+		SourcePath: source.ResolvedPath,
+		Strategy:   strategy,
+	}
 	if m.err != nil {
 		return r, m.err
 	}
@@ -61,9 +73,52 @@ func (m *mockDeployer) DeployOne(targetPath, source string, force bool) (deploy.
 	return r, nil
 }
 
-func (m *mockDeployer) Unapply(configs []deploy.ConfigResult) error { return nil }
-func (m *mockDeployer) Rollback() error                             { return nil }
-func (m *mockDeployer) Deployed() []deploy.ConfigResult             { return m.deployed }
+func (m *mockDeployer) Unapply(configs []deploy.ConfigResult) error {
+	m.unapply = append(m.unapply, configs)
+	return nil
+}
+func (m *mockDeployer) Rollback() error                 { return nil }
+func (m *mockDeployer) Deployed() []deploy.ConfigResult { return m.deployed }
+
+type mockBaseResolver struct {
+	result     *profile.ResolvedBase
+	err        error
+	rawExtends []string
+	configDirs []string
+	cleanedUp  bool
+}
+
+func (m *mockBaseResolver) Resolve(rawExtends string, localConfigDir string) (*profile.ResolvedBase, error) {
+	m.rawExtends = append(m.rawExtends, rawExtends)
+	m.configDirs = append(m.configDirs, localConfigDir)
+	if m.err != nil {
+		return nil, m.err
+	}
+	if m.result == nil {
+		return &profile.ResolvedBase{
+			Config:  &profile.FacetConfig{},
+			Cleanup: func() error { return nil },
+		}, nil
+	}
+	if m.result.Cleanup == nil {
+		m.result.Cleanup = func() error {
+			m.cleanedUp = true
+			return nil
+		}
+	}
+	return m.result, nil
+}
+
+func newStaticBaseResolver(cfg *profile.FacetConfig) *mockBaseResolver {
+	return &mockBaseResolver{
+		result: &profile.ResolvedBase{
+			Config: cfg,
+			Cleanup: func() error {
+				return nil
+			},
+		},
+	}
+}
 
 func TestApply_DryRun_NoSideEffects(t *testing.T) {
 	cfgDir := t.TempDir()
@@ -77,17 +132,18 @@ func TestApply_DryRun_NoSideEffects(t *testing.T) {
 	os.WriteFile(filepath.Join(stateDir, ".local.yaml"), []byte(""), 0o644)
 
 	r := &mockReporter{}
+	baseCfg := &profile.FacetConfig{
+		Packages: []profile.PackageEntry{
+			{Name: "ripgrep", Install: profile.InstallCmd{Command: "brew install ripgrep"}},
+		},
+		Configs: map[string]string{
+			filepath.Join(stateDir, ".zshrc"): "configs/.zshrc",
+		},
+	}
 	loader := &mockLoader{
 		meta: &profile.FacetMeta{},
 		configs: map[string]*profile.FacetConfig{
-			filepath.Join(cfgDir, "base.yaml"): {
-				Packages: []profile.PackageEntry{
-					{Name: "ripgrep", Install: profile.InstallCmd{Command: "brew install ripgrep"}},
-				},
-				Configs: map[string]string{
-					filepath.Join(stateDir, ".zshrc"): "configs/.zshrc",
-				},
-			},
+			filepath.Join(cfgDir, "base.yaml"): baseCfg,
 			filepath.Join(cfgDir, "profiles", "work.yaml"): {
 				Extends: "base",
 			},
@@ -104,10 +160,11 @@ func TestApply_DryRun_NoSideEffects(t *testing.T) {
 
 	mockDep := &mockDeployer{}
 	a := New(Deps{
-		Reporter:   r,
-		Loader:     loader,
-		Installer:  trackingInstaller,
-		StateStore: &mockStateStore{},
+		Reporter:     r,
+		Loader:       loader,
+		BaseResolver: newStaticBaseResolver(baseCfg),
+		Installer:    trackingInstaller,
+		StateStore:   &mockStateStore{},
 		DeployerFactory: func(configDir, homeDir string, vars map[string]any, ownedConfigs []deploy.ConfigResult) deploy.Service {
 			return mockDep
 		},
@@ -214,11 +271,12 @@ func TestApply_WithAI(t *testing.T) {
 	}
 	mockDep := &mockDeployer{}
 	stateStore := &mockStateStore{}
+	baseCfg := &profile.FacetConfig{}
 
 	loader := &mockLoader{
 		meta: &profile.FacetMeta{},
 		configs: map[string]*profile.FacetConfig{
-			filepath.Join(cfgDir, "base.yaml"): {},
+			filepath.Join(cfgDir, "base.yaml"): baseCfg,
 			filepath.Join(cfgDir, "profiles", "work.yaml"): {
 				Extends: "base",
 				AI: &profile.AIConfig{
@@ -238,6 +296,7 @@ func TestApply_WithAI(t *testing.T) {
 	a := New(Deps{
 		Reporter:       r,
 		Loader:         loader,
+		BaseResolver:   newStaticBaseResolver(baseCfg),
 		Installer:      &mockInstaller{},
 		StateStore:     stateStore,
 		AIOrchestrator: aiOrch,
@@ -272,20 +331,21 @@ func TestApply_WithInheritedAIAgentsFromBase(t *testing.T) {
 	aiOrch := &mockAIOrchestrator{}
 	stateStore := &mockStateStore{}
 	mockDep := &mockDeployer{}
+	baseCfg := &profile.FacetConfig{
+		AI: &profile.AIConfig{
+			Agents: []string{"claude-code"},
+			Permissions: map[string]*profile.PermissionsConfig{
+				"claude-code": {
+					Allow: []string{"Read"},
+				},
+			},
+		},
+	}
 
 	loader := &mockLoader{
 		meta: &profile.FacetMeta{},
 		configs: map[string]*profile.FacetConfig{
-			filepath.Join(cfgDir, "base.yaml"): {
-				AI: &profile.AIConfig{
-					Agents: []string{"claude-code"},
-					Permissions: map[string]*profile.PermissionsConfig{
-						"claude-code": {
-							Allow: []string{"Read"},
-						},
-					},
-				},
-			},
+			filepath.Join(cfgDir, "base.yaml"): baseCfg,
 			filepath.Join(cfgDir, "profiles", "work.yaml"): {
 				Extends: "base",
 				AI: &profile.AIConfig{
@@ -303,6 +363,7 @@ func TestApply_WithInheritedAIAgentsFromBase(t *testing.T) {
 	a := New(Deps{
 		Reporter:       &mockReporter{},
 		Loader:         loader,
+		BaseResolver:   newStaticBaseResolver(baseCfg),
 		Installer:      &mockInstaller{},
 		StateStore:     stateStore,
 		AIOrchestrator: aiOrch,
@@ -331,11 +392,12 @@ func TestApply_WithoutAI(t *testing.T) {
 	aiOrch := &mockAIOrchestrator{}
 	mockDep := &mockDeployer{}
 	stateStore := &mockStateStore{}
+	baseCfg := &profile.FacetConfig{}
 
 	loader := &mockLoader{
 		meta: &profile.FacetMeta{},
 		configs: map[string]*profile.FacetConfig{
-			filepath.Join(cfgDir, "base.yaml"):             {},
+			filepath.Join(cfgDir, "base.yaml"):             baseCfg,
 			filepath.Join(cfgDir, "profiles", "work.yaml"): {Extends: "base"},
 			filepath.Join(stateDir, ".local.yaml"):         {},
 		},
@@ -344,6 +406,7 @@ func TestApply_WithoutAI(t *testing.T) {
 	a := New(Deps{
 		Reporter:       r,
 		Loader:         loader,
+		BaseResolver:   newStaticBaseResolver(baseCfg),
 		Installer:      &mockInstaller{},
 		StateStore:     stateStore,
 		AIOrchestrator: aiOrch,
@@ -391,11 +454,12 @@ func TestApply_SameProfileRemovalOfAISectionReconcilesPreviousState(t *testing.T
 		},
 	}
 	mockDep := &mockDeployer{}
+	baseCfg := &profile.FacetConfig{}
 
 	loader := &mockLoader{
 		meta: &profile.FacetMeta{},
 		configs: map[string]*profile.FacetConfig{
-			filepath.Join(cfgDir, "base.yaml"):             {},
+			filepath.Join(cfgDir, "base.yaml"):             baseCfg,
 			filepath.Join(cfgDir, "profiles", "work.yaml"): {Extends: "base"},
 			filepath.Join(stateDir, ".local.yaml"):         {},
 		},
@@ -404,6 +468,7 @@ func TestApply_SameProfileRemovalOfAISectionReconcilesPreviousState(t *testing.T
 	a := New(Deps{
 		Reporter:       &mockReporter{},
 		Loader:         loader,
+		BaseResolver:   newStaticBaseResolver(baseCfg),
 		Installer:      &mockInstaller{},
 		StateStore:     stateStore,
 		AIOrchestrator: aiOrch,
@@ -450,11 +515,12 @@ func TestApply_ProfileSwitchTriggersAIUnapply(t *testing.T) {
 		},
 	}
 	mockDep := &mockDeployer{}
+	baseCfg := &profile.FacetConfig{}
 
 	loader := &mockLoader{
 		meta: &profile.FacetMeta{},
 		configs: map[string]*profile.FacetConfig{
-			filepath.Join(cfgDir, "base.yaml"): {},
+			filepath.Join(cfgDir, "base.yaml"): baseCfg,
 			filepath.Join(cfgDir, "profiles", "personal.yaml"): {
 				Extends: "base",
 				AI: &profile.AIConfig{
@@ -473,6 +539,7 @@ func TestApply_ProfileSwitchTriggersAIUnapply(t *testing.T) {
 	a := New(Deps{
 		Reporter:       &mockReporter{},
 		Loader:         loader,
+		BaseResolver:   newStaticBaseResolver(baseCfg),
 		Installer:      &mockInstaller{},
 		StateStore:     stateStore,
 		AIOrchestrator: aiOrch,
@@ -520,11 +587,12 @@ func TestApply_ForceTriggersAIUnapply(t *testing.T) {
 		},
 	}
 	mockDep := &mockDeployer{}
+	baseCfg := &profile.FacetConfig{}
 
 	loader := &mockLoader{
 		meta: &profile.FacetMeta{},
 		configs: map[string]*profile.FacetConfig{
-			filepath.Join(cfgDir, "base.yaml"): {},
+			filepath.Join(cfgDir, "base.yaml"): baseCfg,
 			filepath.Join(cfgDir, "profiles", "work.yaml"): {
 				Extends: "base",
 				AI: &profile.AIConfig{
@@ -543,6 +611,7 @@ func TestApply_ForceTriggersAIUnapply(t *testing.T) {
 	a := New(Deps{
 		Reporter:       &mockReporter{},
 		Loader:         loader,
+		BaseResolver:   newStaticBaseResolver(baseCfg),
 		Installer:      &mockInstaller{},
 		StateStore:     stateStore,
 		AIOrchestrator: aiOrch,
@@ -588,18 +657,19 @@ func TestApply_RunsPreAndPostApplyScripts(t *testing.T) {
 	runner := &mockScriptRunner{}
 	mockDep := &mockDeployer{}
 	stateStore := &mockStateStore{}
+	baseCfg := &profile.FacetConfig{
+		PreApply: []profile.ScriptEntry{
+			{Name: "base-pre", Run: "echo base-pre"},
+		},
+		PostApply: []profile.ScriptEntry{
+			{Name: "base-post", Run: "echo base-post"},
+		},
+	}
 
 	loader := &mockLoader{
 		meta: &profile.FacetMeta{},
 		configs: map[string]*profile.FacetConfig{
-			filepath.Join(cfgDir, "base.yaml"): {
-				PreApply: []profile.ScriptEntry{
-					{Name: "base-pre", Run: "echo base-pre"},
-				},
-				PostApply: []profile.ScriptEntry{
-					{Name: "base-post", Run: "echo base-post"},
-				},
-			},
+			filepath.Join(cfgDir, "base.yaml"): baseCfg,
 			filepath.Join(cfgDir, "profiles", "work.yaml"): {
 				Extends: "base",
 				PreApply: []profile.ScriptEntry{
@@ -616,6 +686,7 @@ func TestApply_RunsPreAndPostApplyScripts(t *testing.T) {
 	a := New(Deps{
 		Reporter:     &mockReporter{},
 		Loader:       loader,
+		BaseResolver: newStaticBaseResolver(baseCfg),
 		Installer:    &mockInstaller{},
 		StateStore:   stateStore,
 		ScriptRunner: runner,
@@ -651,15 +722,16 @@ func TestApply_PreApplyScriptFailureHaltsApply(t *testing.T) {
 	}
 	installerCalled := false
 	mockDep := &mockDeployer{}
+	baseCfg := &profile.FacetConfig{
+		PreApply: []profile.ScriptEntry{
+			{Name: "will-fail", Run: "echo fail"},
+		},
+	}
 
 	loader := &mockLoader{
 		meta: &profile.FacetMeta{},
 		configs: map[string]*profile.FacetConfig{
-			filepath.Join(cfgDir, "base.yaml"): {
-				PreApply: []profile.ScriptEntry{
-					{Name: "will-fail", Run: "echo fail"},
-				},
-			},
+			filepath.Join(cfgDir, "base.yaml"):             baseCfg,
 			filepath.Join(cfgDir, "profiles", "work.yaml"): {Extends: "base"},
 			filepath.Join(stateDir, ".local.yaml"):         {},
 		},
@@ -668,6 +740,7 @@ func TestApply_PreApplyScriptFailureHaltsApply(t *testing.T) {
 	a := New(Deps{
 		Reporter:     &mockReporter{},
 		Loader:       loader,
+		BaseResolver: newStaticBaseResolver(baseCfg),
 		Installer:    &trackingInstaller{called: &installerCalled},
 		StateStore:   &mockStateStore{},
 		ScriptRunner: runner,
@@ -695,21 +768,22 @@ func TestApply_StagesFiltering(t *testing.T) {
 	runner := &mockScriptRunner{}
 	installerCalled := false
 	mockDep := &mockDeployer{}
+	baseCfg := &profile.FacetConfig{
+		PreApply: []profile.ScriptEntry{
+			{Name: "pre", Run: "echo pre"},
+		},
+		PostApply: []profile.ScriptEntry{
+			{Name: "post", Run: "echo post"},
+		},
+		Packages: []profile.PackageEntry{
+			{Name: "git", Install: profile.InstallCmd{Command: "brew install git"}},
+		},
+	}
 
 	loader := &mockLoader{
 		meta: &profile.FacetMeta{},
 		configs: map[string]*profile.FacetConfig{
-			filepath.Join(cfgDir, "base.yaml"): {
-				PreApply: []profile.ScriptEntry{
-					{Name: "pre", Run: "echo pre"},
-				},
-				PostApply: []profile.ScriptEntry{
-					{Name: "post", Run: "echo post"},
-				},
-				Packages: []profile.PackageEntry{
-					{Name: "git", Install: profile.InstallCmd{Command: "brew install git"}},
-				},
-			},
+			filepath.Join(cfgDir, "base.yaml"):             baseCfg,
 			filepath.Join(cfgDir, "profiles", "work.yaml"): {Extends: "base"},
 			filepath.Join(stateDir, ".local.yaml"):         {},
 		},
@@ -718,6 +792,7 @@ func TestApply_StagesFiltering(t *testing.T) {
 	a := New(Deps{
 		Reporter:     &mockReporter{},
 		Loader:       loader,
+		BaseResolver: newStaticBaseResolver(baseCfg),
 		Installer:    &trackingInstaller{called: &installerCalled},
 		StateStore:   &mockStateStore{},
 		ScriptRunner: runner,
@@ -737,6 +812,161 @@ func TestApply_StagesFiltering(t *testing.T) {
 	assert.True(t, installerCalled, "installer should run when packages stage is selected")
 	assert.Empty(t, runner.commands, "scripts should not run when not in stages")
 	assert.Empty(t, mockDep.deployed, "configs should not deploy when not in stages")
+}
+
+func TestApply_StagesPackages_DoesNotUnapplyOrCarryStaleState(t *testing.T) {
+	cfgDir := t.TempDir()
+	stateDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, ".local.yaml"), []byte(""), 0o644))
+
+	prevConfigs := []deploy.ConfigResult{{Target: filepath.Join(t.TempDir(), ".gitconfig"), Source: "configs/.gitconfig", Strategy: deploy.StrategySymlink}}
+	prevAIState := &ai.AIState{
+		Permissions: map[string]ai.PermissionState{
+			"claude-code": {Allow: []string{"Read"}},
+		},
+	}
+	mockDep := &mockDeployer{}
+	stateStore := &mockStateStore{
+		state: &ApplyState{
+			Profile: "other",
+			Configs: prevConfigs,
+			AI:      prevAIState,
+		},
+	}
+	aiOrch := &mockAIOrchestrator{}
+	baseCfg := &profile.FacetConfig{
+		Packages: []profile.PackageEntry{
+			{Name: "git", Install: profile.InstallCmd{Command: "brew install git"}},
+		},
+	}
+	loader := &mockLoader{
+		meta: &profile.FacetMeta{},
+		configs: map[string]*profile.FacetConfig{
+			filepath.Join(cfgDir, "profiles", "work.yaml"): {Extends: "file:///tmp/base.git"},
+			filepath.Join(stateDir, ".local.yaml"):         {},
+		},
+	}
+
+	installerCalled := false
+	a := New(Deps{
+		Reporter:       &mockReporter{},
+		Loader:         loader,
+		BaseResolver:   newStaticBaseResolver(baseCfg),
+		Installer:      &trackingInstaller{called: &installerCalled},
+		StateStore:     stateStore,
+		AIOrchestrator: aiOrch,
+		DeployerFactory: func(configDir, homeDir string, vars map[string]any, ownedConfigs []deploy.ConfigResult) deploy.Service {
+			return mockDep
+		},
+		OSName: "macos",
+	})
+
+	err := a.Apply("work", ApplyOpts{ConfigDir: cfgDir, StateDir: stateDir, Stages: "packages"})
+	require.NoError(t, err)
+
+	assert.True(t, installerCalled)
+	assert.Empty(t, mockDep.unapply)
+	assert.False(t, aiOrch.unapplyCalled)
+	assert.Equal(t, "other", stateStore.written.Profile)
+	assert.Equal(t, prevConfigs, stateStore.written.Configs)
+	assert.Equal(t, prevAIState, stateStore.written.AI)
+}
+
+func TestApply_SameProfileStagesPackages_DoesNotCleanupOrphans(t *testing.T) {
+	cfgDir := t.TempDir()
+	stateDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, ".local.yaml"), []byte(""), 0o644))
+
+	prevConfigs := []deploy.ConfigResult{{Target: filepath.Join(t.TempDir(), ".gitconfig"), Source: "configs/.gitconfig", Strategy: deploy.StrategySymlink}}
+	mockDep := &mockDeployer{}
+	stateStore := &mockStateStore{
+		state: &ApplyState{
+			Profile: "work",
+			Configs: prevConfigs,
+		},
+	}
+	baseCfg := &profile.FacetConfig{
+		Packages: []profile.PackageEntry{
+			{Name: "git", Install: profile.InstallCmd{Command: "brew install git"}},
+		},
+	}
+	loader := &mockLoader{
+		meta: &profile.FacetMeta{},
+		configs: map[string]*profile.FacetConfig{
+			filepath.Join(cfgDir, "profiles", "work.yaml"): {Extends: "file:///tmp/base.git"},
+			filepath.Join(stateDir, ".local.yaml"):         {},
+		},
+	}
+
+	installerCalled := false
+	a := New(Deps{
+		Reporter:     &mockReporter{},
+		Loader:       loader,
+		BaseResolver: newStaticBaseResolver(baseCfg),
+		Installer:    &trackingInstaller{called: &installerCalled},
+		StateStore:   stateStore,
+		DeployerFactory: func(configDir, homeDir string, vars map[string]any, ownedConfigs []deploy.ConfigResult) deploy.Service {
+			return mockDep
+		},
+		OSName: "macos",
+	})
+
+	err := a.Apply("work", ApplyOpts{ConfigDir: cfgDir, StateDir: stateDir, Stages: "packages"})
+	require.NoError(t, err)
+
+	assert.True(t, installerCalled)
+	assert.Empty(t, mockDep.unapply)
+	assert.Equal(t, "work", stateStore.written.Profile)
+	assert.Equal(t, prevConfigs, stateStore.written.Configs)
+}
+
+func TestApply_SameProfileSkipFailure_PreservesPreviousConfigState(t *testing.T) {
+	cfgDir := t.TempDir()
+	stateDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, ".local.yaml"), []byte(""), 0o644))
+
+	target := filepath.Join(t.TempDir(), ".gitconfig")
+	prevConfigs := []deploy.ConfigResult{{
+		Target:     target,
+		Source:     "configs/.gitconfig",
+		SourcePath: filepath.Join(cfgDir, "configs", ".gitconfig"),
+		Strategy:   deploy.StrategySymlink,
+	}}
+	mockDep := &mockDeployer{err: fmt.Errorf("deploy failed")}
+	stateStore := &mockStateStore{
+		state: &ApplyState{
+			Profile: "work",
+			Configs: prevConfigs,
+		},
+	}
+	baseCfg := &profile.FacetConfig{
+		Configs: map[string]string{
+			target: "configs/.gitconfig",
+		},
+	}
+	loader := &mockLoader{
+		meta: &profile.FacetMeta{},
+		configs: map[string]*profile.FacetConfig{
+			filepath.Join(cfgDir, "profiles", "work.yaml"): {Extends: "file:///tmp/base.git"},
+			filepath.Join(stateDir, ".local.yaml"):         {},
+		},
+	}
+
+	a := New(Deps{
+		Reporter:     &mockReporter{},
+		Loader:       loader,
+		BaseResolver: newStaticBaseResolver(baseCfg),
+		Installer:    &mockInstaller{},
+		StateStore:   stateStore,
+		DeployerFactory: func(configDir, homeDir string, vars map[string]any, ownedConfigs []deploy.ConfigResult) deploy.Service {
+			return mockDep
+		},
+		OSName: "macos",
+	})
+
+	err := a.Apply("work", ApplyOpts{ConfigDir: cfgDir, StateDir: stateDir, SkipFailure: true})
+	require.NoError(t, err)
+	assert.Equal(t, prevConfigs, stateStore.written.Configs)
 }
 
 func TestApply_InvalidStageReturnsError(t *testing.T) {
@@ -764,18 +994,19 @@ func TestApply_ScriptsResolveVariables(t *testing.T) {
 
 	runner := &mockScriptRunner{}
 	mockDep := &mockDeployer{}
+	baseCfg := &profile.FacetConfig{
+		Vars: map[string]any{
+			"git": map[string]any{"email": "sarah@acme.com"},
+		},
+		PreApply: []profile.ScriptEntry{
+			{Name: "setup", Run: `echo "${facet:git.email}"`},
+		},
+	}
 
 	loader := &mockLoader{
 		meta: &profile.FacetMeta{},
 		configs: map[string]*profile.FacetConfig{
-			filepath.Join(cfgDir, "base.yaml"): {
-				Vars: map[string]any{
-					"git": map[string]any{"email": "sarah@acme.com"},
-				},
-				PreApply: []profile.ScriptEntry{
-					{Name: "setup", Run: `echo "${facet:git.email}"`},
-				},
-			},
+			filepath.Join(cfgDir, "base.yaml"):             baseCfg,
 			filepath.Join(cfgDir, "profiles", "work.yaml"): {Extends: "base"},
 			filepath.Join(stateDir, ".local.yaml"):         {},
 		},
@@ -784,6 +1015,7 @@ func TestApply_ScriptsResolveVariables(t *testing.T) {
 	a := New(Deps{
 		Reporter:     &mockReporter{},
 		Loader:       loader,
+		BaseResolver: newStaticBaseResolver(baseCfg),
 		Installer:    &mockInstaller{},
 		StateStore:   &mockStateStore{},
 		ScriptRunner: runner,
@@ -811,11 +1043,12 @@ func TestApply_DryRunSkipsAIOrchestrator(t *testing.T) {
 
 	aiOrch := &mockAIOrchestrator{}
 	mockDep := &mockDeployer{}
+	baseCfg := &profile.FacetConfig{}
 
 	loader := &mockLoader{
 		meta: &profile.FacetMeta{},
 		configs: map[string]*profile.FacetConfig{
-			filepath.Join(cfgDir, "base.yaml"): {},
+			filepath.Join(cfgDir, "base.yaml"): baseCfg,
 			filepath.Join(cfgDir, "profiles", "work.yaml"): {
 				Extends: "base",
 				AI: &profile.AIConfig{
@@ -835,6 +1068,7 @@ func TestApply_DryRunSkipsAIOrchestrator(t *testing.T) {
 	a := New(Deps{
 		Reporter:       &mockReporter{},
 		Loader:         loader,
+		BaseResolver:   newStaticBaseResolver(baseCfg),
 		Installer:      &mockInstaller{},
 		StateStore:     &mockStateStore{},
 		AIOrchestrator: aiOrch,
@@ -853,4 +1087,182 @@ func TestApply_DryRunSkipsAIOrchestrator(t *testing.T) {
 
 	assert.False(t, aiOrch.applyCalled, "AI orchestrator Apply should not be called during dry run")
 	assert.False(t, aiOrch.unapplyCalled, "AI orchestrator Unapply should not be called during dry run")
+}
+
+func TestApply_CleansUpResolvedBase(t *testing.T) {
+	cfgDir := t.TempDir()
+	stateDir := t.TempDir()
+
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, ".local.yaml"), []byte(""), 0o644))
+
+	resolver := &mockBaseResolver{}
+	resolver.result = &profile.ResolvedBase{
+		Config: &profile.FacetConfig{},
+		Cleanup: func() error {
+			resolver.cleanedUp = true
+			return nil
+		},
+	}
+	loader := &mockLoader{
+		meta: &profile.FacetMeta{},
+		configs: map[string]*profile.FacetConfig{
+			filepath.Join(cfgDir, "profiles", "work.yaml"): {Extends: "file:///tmp/base.git"},
+			filepath.Join(stateDir, ".local.yaml"):         {},
+		},
+	}
+
+	a := New(Deps{
+		Reporter:     &mockReporter{},
+		Loader:       loader,
+		BaseResolver: resolver,
+		Installer:    &mockInstaller{},
+		StateStore:   &mockStateStore{},
+		DeployerFactory: func(configDir, homeDir string, vars map[string]any, ownedConfigs []deploy.ConfigResult) deploy.Service {
+			return &mockDeployer{}
+		},
+		OSName: "macos",
+	})
+
+	err := a.Apply("work", ApplyOpts{ConfigDir: cfgDir, StateDir: stateDir})
+	require.NoError(t, err)
+	assert.True(t, resolver.cleanedUp)
+}
+
+func TestApply_UsesRemoteConfigSourceAndMaterializes(t *testing.T) {
+	cfgDir := t.TempDir()
+	stateDir := t.TempDir()
+	remoteRoot := t.TempDir()
+
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, ".local.yaml"), []byte(""), 0o644))
+
+	baseCfg := &profile.FacetConfig{
+		Configs: map[string]string{
+			"~/.gitconfig": "configs/.gitconfig",
+		},
+		ConfigMeta: map[string]profile.ConfigProvenance{
+			"~/.gitconfig": {
+				SourceRoot:  remoteRoot,
+				Materialize: true,
+			},
+		},
+	}
+	loader := &mockLoader{
+		meta: &profile.FacetMeta{},
+		configs: map[string]*profile.FacetConfig{
+			filepath.Join(cfgDir, "profiles", "work.yaml"): {Extends: "file:///tmp/base.git"},
+			filepath.Join(stateDir, ".local.yaml"):         {},
+		},
+	}
+	mockDep := &mockDeployer{}
+
+	a := New(Deps{
+		Reporter:     &mockReporter{},
+		Loader:       loader,
+		BaseResolver: newStaticBaseResolver(baseCfg),
+		Installer:    &mockInstaller{},
+		StateStore:   &mockStateStore{},
+		DeployerFactory: func(configDir, homeDir string, vars map[string]any, ownedConfigs []deploy.ConfigResult) deploy.Service {
+			return mockDep
+		},
+		OSName: "macos",
+	})
+
+	err := a.Apply("work", ApplyOpts{ConfigDir: cfgDir, StateDir: stateDir})
+	require.NoError(t, err)
+	require.Len(t, mockDep.sources, 1)
+	assert.Equal(t, "configs/.gitconfig", mockDep.sources[0].DisplaySource)
+	assert.Equal(t, filepath.Join(remoteRoot, "configs", ".gitconfig"), mockDep.sources[0].ResolvedPath)
+	assert.True(t, mockDep.sources[0].Materialize)
+	require.Len(t, mockDep.deployed, 1)
+	assert.Equal(t, deploy.StrategyCopy, mockDep.deployed[0].Strategy)
+}
+
+func TestApply_RunsRemoteScriptsFromRemoteClone(t *testing.T) {
+	cfgDir := t.TempDir()
+	stateDir := t.TempDir()
+
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, ".local.yaml"), []byte(""), 0o644))
+
+	baseCfg := &profile.FacetConfig{
+		PreApply: []profile.ScriptEntry{
+			{Name: "remote-pre", Run: "echo remote-pre", WorkDir: "/remote-root"},
+		},
+		PostApply: []profile.ScriptEntry{
+			{Name: "remote-post", Run: "echo remote-post", WorkDir: "/remote-root"},
+		},
+	}
+	runner := &mockScriptRunner{}
+	loader := &mockLoader{
+		meta: &profile.FacetMeta{},
+		configs: map[string]*profile.FacetConfig{
+			filepath.Join(cfgDir, "profiles", "work.yaml"): {
+				Extends: "file:///tmp/base.git",
+				PreApply: []profile.ScriptEntry{
+					{Name: "profile-pre", Run: "echo profile-pre"},
+				},
+				PostApply: []profile.ScriptEntry{
+					{Name: "profile-post", Run: "echo profile-post"},
+				},
+			},
+			filepath.Join(stateDir, ".local.yaml"): {},
+		},
+	}
+
+	a := New(Deps{
+		Reporter:     &mockReporter{},
+		Loader:       loader,
+		BaseResolver: newStaticBaseResolver(baseCfg),
+		Installer:    &mockInstaller{},
+		StateStore:   &mockStateStore{},
+		ScriptRunner: runner,
+		DeployerFactory: func(configDir, homeDir string, vars map[string]any, ownedConfigs []deploy.ConfigResult) deploy.Service {
+			return &mockDeployer{}
+		},
+		OSName: "macos",
+	})
+
+	err := a.Apply("work", ApplyOpts{ConfigDir: cfgDir, StateDir: stateDir})
+	require.NoError(t, err)
+	require.Len(t, runner.commands, 4)
+	assert.Equal(t, []string{"/remote-root", cfgDir, "/remote-root", cfgDir}, runner.dirs)
+}
+
+func TestApply_SameProfileInvalidTargetDoesNotTriggerOrphanCleanup(t *testing.T) {
+	cfgDir := t.TempDir()
+	stateDir := t.TempDir()
+	prevTarget := filepath.Join(t.TempDir(), "existing-config")
+
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, ".local.yaml"), []byte(""), 0o644))
+
+	baseCfg := &profile.FacetConfig{}
+	mockDep := &mockDeployer{}
+	loader := &mockLoader{
+		meta: &profile.FacetMeta{},
+		configs: map[string]*profile.FacetConfig{
+			filepath.Join(cfgDir, "profiles", "work.yaml"): {
+				Extends: "file:///tmp/base.git",
+				Configs: map[string]string{
+					"$UNDEFINED_TARGET/.gitconfig": "configs/.gitconfig",
+				},
+			},
+			filepath.Join(stateDir, ".local.yaml"): {},
+		},
+	}
+
+	a := New(Deps{
+		Reporter:     &mockReporter{},
+		Loader:       loader,
+		BaseResolver: newStaticBaseResolver(baseCfg),
+		Installer:    &mockInstaller{},
+		StateStore:   &mockStateStore{state: &ApplyState{Profile: "work", Configs: []deploy.ConfigResult{{Target: prevTarget, Source: "configs/.gitconfig", Strategy: deploy.StrategySymlink}}}},
+		DeployerFactory: func(configDir, homeDir string, vars map[string]any, ownedConfigs []deploy.ConfigResult) deploy.Service {
+			return mockDep
+		},
+		OSName: "macos",
+	})
+
+	err := a.Apply("work", ApplyOpts{ConfigDir: cfgDir, StateDir: stateDir})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "undefined environment variable")
+	assert.Empty(t, mockDep.unapply)
 }

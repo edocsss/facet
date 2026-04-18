@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"facet/internal/profile"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -72,21 +74,48 @@ func TestExpandPath_RelativePath_Error(t *testing.T) {
 	assert.Contains(t, err.Error(), "absolute")
 }
 
-func TestValidateSourcePath_WithinConfigDir(t *testing.T) {
-	configDir := "/home/user/dotfiles"
-	err := ValidateSourcePath("configs/.gitconfig", configDir)
-	assert.NoError(t, err)
+func TestResolveSourcePath_LocalRelative(t *testing.T) {
+	configDir := t.TempDir()
+	spec, err := ResolveSourcePath("configs/.gitconfig", profile.ConfigProvenance{}, configDir)
+	require.NoError(t, err)
+	assert.Equal(t, "configs/.gitconfig", spec.DisplaySource)
+	assert.Equal(t, filepath.Join(configDir, "configs", ".gitconfig"), spec.ResolvedPath)
+	assert.False(t, spec.Materialize)
 }
 
-func TestValidateSourcePath_Traversal_Error(t *testing.T) {
-	configDir := "/home/user/dotfiles"
-	err := ValidateSourcePath("../outside/.gitconfig", configDir)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "outside")
+func TestResolveSourcePath_RemoteResolvedAbsolute(t *testing.T) {
+	remoteRoot := t.TempDir()
+	spec, err := ResolveSourcePath("configs/.gitconfig", profile.ConfigProvenance{
+		SourceRoot:  remoteRoot,
+		Materialize: true,
+	}, t.TempDir())
+	require.NoError(t, err)
+	assert.Equal(t, "configs/.gitconfig", spec.DisplaySource)
+	assert.Equal(t, filepath.Join(remoteRoot, "configs", ".gitconfig"), spec.ResolvedPath)
+	assert.True(t, spec.Materialize)
 }
 
-func TestValidateSourcePath_AbsolutePath_Error(t *testing.T) {
-	configDir := "/home/user/dotfiles"
-	err := ValidateSourcePath("/etc/passwd", configDir)
+func TestResolveSourcePath_TraversalError(t *testing.T) {
+	configDir := t.TempDir()
+	_, err := ResolveSourcePath("../outside/.gitconfig", profile.ConfigProvenance{}, configDir)
 	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "escapes")
+}
+
+func TestResolveSourcePath_AbsolutePreserved(t *testing.T) {
+	sourcePath := filepath.Join(t.TempDir(), "configs", ".gitconfig")
+	spec, err := ResolveSourcePath(sourcePath, profile.ConfigProvenance{}, t.TempDir())
+	require.NoError(t, err)
+	assert.Equal(t, sourcePath, spec.DisplaySource)
+	assert.Equal(t, sourcePath, spec.ResolvedPath)
+	assert.False(t, spec.Materialize)
+}
+
+func TestResolveSourcePath_RemoteAbsoluteRejected(t *testing.T) {
+	_, err := ResolveSourcePath("/etc/passwd", profile.ConfigProvenance{
+		SourceRoot:  t.TempDir(),
+		Materialize: true,
+	}, t.TempDir())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must be relative")
 }

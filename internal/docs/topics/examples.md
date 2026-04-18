@@ -46,7 +46,7 @@ ai:
 ## `profiles/work.yaml`
 
 ```yaml
-extends: base
+extends: ./base.yaml
 
 vars:
   git_email: sarah@acme.com
@@ -76,6 +76,17 @@ ai:
         - deploy-helper
         - code-review
 ```
+
+## `profiles/remote-work.yaml`
+
+```yaml
+extends: git@github.com:acme/shared-dotfiles.git@main
+
+configs:
+  ~/.gitconfig: configs/work/.gitconfig
+```
+
+Configs inherited from a git-based base are materialized into place. Local profile configs still use normal symlink/template behavior.
 
 ## Pre-apply scripts in `base.yaml`
 

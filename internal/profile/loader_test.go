@@ -100,23 +100,36 @@ vars:
 	assert.Equal(t, "sarah@hey.com", gitVars["email"])
 }
 
+func TestValidateProfile_ValidGitExtends(t *testing.T) {
+	cfg := &FacetConfig{Extends: "git@github.com:me/personal-dotfiles.git@main"}
+	err := ValidateProfile(cfg)
+	assert.NoError(t, err)
+}
+
+func TestValidateProfile_ValidLocalFileExtends(t *testing.T) {
+	cfg := &FacetConfig{Extends: "shared/base.yaml"}
+	err := ValidateProfile(cfg)
+	assert.NoError(t, err)
+}
+
 func TestValidateProfile_InvalidExtends(t *testing.T) {
-	cfg := &FacetConfig{Extends: "other"}
+	cfg := &FacetConfig{Extends: "@not-a-locator"}
 	err := ValidateProfile(cfg)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "base")
+	assert.Contains(t, err.Error(), "extends")
+}
+
+func TestValidateProfile_InvalidBareTokenExtends(t *testing.T) {
+	cfg := &FacetConfig{Extends: "something_else"}
+	err := ValidateProfile(cfg)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "extends")
 }
 
 func TestValidateProfile_MissingExtends(t *testing.T) {
 	cfg := &FacetConfig{}
 	err := ValidateProfile(cfg)
 	assert.Error(t, err)
-}
-
-func TestValidateProfile_Valid(t *testing.T) {
-	cfg := &FacetConfig{Extends: "base"}
-	err := ValidateProfile(cfg)
-	assert.NoError(t, err)
 }
 
 func TestValidateProfile_AIEmptyAgents(t *testing.T) {

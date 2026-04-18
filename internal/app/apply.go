@@ -83,13 +83,7 @@ func (a *App) Apply(profileName string, opts ApplyOpts) error {
 		return fmt.Errorf("Not a facet config directory (facet.yaml not found). Use -c to specify the config directory, or run facet scaffold to create one.\n  detail: %w", err)
 	}
 
-	// Step 2: Load base.yaml
-	baseCfg, err := a.loader.LoadConfig(filepath.Join(opts.ConfigDir, "base.yaml"))
-	if err != nil {
-		return err
-	}
-
-	// Step 3: Load profile
+	// Step 2: Load profile
 	profilePath := filepath.Join(opts.ConfigDir, "profiles", profileName+".yaml")
 	profileCfg, err := a.loader.LoadConfig(profilePath)
 	if err != nil {
@@ -98,15 +92,31 @@ func (a *App) Apply(profileName string, opts ApplyOpts) error {
 	if err := profile.ValidateProfile(profileCfg); err != nil {
 		return err
 	}
+	profile.AnnotateLayer(profileCfg, opts.ConfigDir, false)
 
-	// Step 4: Load .local.yaml
+	if a.baseResolver == nil {
+		return fmt.Errorf("base resolver is not configured")
+	}
+	resolvedBase, err := a.baseResolver.Resolve(profileCfg.Extends, opts.ConfigDir)
+	if err != nil {
+		return fmt.Errorf("cannot resolve extends %q: %w", profileCfg.Extends, err)
+	}
+	defer func() {
+		if cleanupErr := resolvedBase.Cleanup(); cleanupErr != nil {
+			a.reporter.Warning(fmt.Sprintf("Failed to clean extends clone: %v", cleanupErr))
+		}
+	}()
+	baseCfg := resolvedBase.Config
+
+	// Step 3: Load .local.yaml
 	localPath := filepath.Join(opts.StateDir, ".local.yaml")
 	localCfg, err := a.loader.LoadConfig(localPath)
 	if err != nil {
 		return fmt.Errorf(".local.yaml is required in %s: %w", opts.StateDir, err)
 	}
+	profile.AnnotateLayer(localCfg, opts.ConfigDir, false)
 
-	// Step 5: Merge layers
+	// Step 4: Merge layers
 	merged, err := profile.Merge(baseCfg, profileCfg)
 	if err != nil {
 		return fmt.Errorf("merge error: %w", err)
@@ -119,7 +129,7 @@ func (a *App) Apply(profileName string, opts ApplyOpts) error {
 		return err
 	}
 
-	// Step 6: Resolve variables
+	// Step 5: Resolve variables
 	resolved, err := profile.Resolve(merged)
 	if err != nil {
 		return err
@@ -146,6 +156,8 @@ func (a *App) Apply(profileName string, opts ApplyOpts) error {
 
 	var prevConfigs []deploy.ConfigResult
 	var prevAIState *ai.AIState
+	currentConfigTargets := make(map[string]bool)
+	preserveAllPreviousConfigs := false
 	if prevState != nil {
 		prevConfigs = prevState.Configs
 		prevAIState = prevState.AI
@@ -155,36 +167,45 @@ func (a *App) Apply(profileName string, opts ApplyOpts) error {
 	if prevState != nil {
 		shouldUnapply := opts.Force || prevState.Profile != profileName
 		if shouldUnapply {
-			if a.aiOrchestrator != nil && prevState.AI != nil {
+			if stages["ai"] && a.aiOrchestrator != nil && prevState.AI != nil {
 				if err := a.aiOrchestrator.Unapply(prevState.AI); err != nil {
 					a.reporter.Error(fmt.Sprintf("AI unapply failed: %v", err))
 				}
+				prevAIState = nil
 			}
-			unapplyDeployer := a.deployerFactory(opts.ConfigDir, "", resolved.Vars, nil)
-			if err := unapplyDeployer.Unapply(prevState.Configs); err != nil {
-				a.reporter.Warning(fmt.Sprintf("Unapply warning: %v", err))
+			if stages["configs"] {
+				unapplyDeployer := a.deployerFactory(opts.ConfigDir, "", resolved.Vars, nil)
+				if err := unapplyDeployer.Unapply(prevState.Configs); err != nil {
+					a.reporter.Warning(fmt.Sprintf("Unapply warning: %v", err))
+				}
+				prevConfigs = nil
 			}
-			prevConfigs = nil
-			prevAIState = nil
-		} else {
+		} else if stages["configs"] {
 			// Same profile reapply — find orphaned configs to clean up
-			newTargets := make(map[string]bool)
 			for target := range resolved.Configs {
 				expanded, err := deploy.ExpandPath(target)
-				if err == nil {
-					newTargets[expanded] = true
+				if err != nil {
+					if opts.SkipFailure {
+						preserveAllPreviousConfigs = true
+						continue
+					}
+					return err
 				}
+				currentConfigTargets[expanded] = true
 			}
-			var orphans []deploy.ConfigResult
-			for _, cfg := range prevState.Configs {
-				if !newTargets[cfg.Target] {
-					orphans = append(orphans, cfg)
+
+			if !preserveAllPreviousConfigs {
+				var orphans []deploy.ConfigResult
+				for _, cfg := range prevState.Configs {
+					if !currentConfigTargets[cfg.Target] {
+						orphans = append(orphans, cfg)
+					}
 				}
-			}
-			if len(orphans) > 0 {
-				orphanDeployer := a.deployerFactory(opts.ConfigDir, "", nil, nil)
-				if err := orphanDeployer.Unapply(orphans); err != nil {
-					a.reporter.Warning(fmt.Sprintf("Orphan cleanup warning: %v", err))
+				if len(orphans) > 0 {
+					orphanDeployer := a.deployerFactory(opts.ConfigDir, "", nil, nil)
+					if err := orphanDeployer.Unapply(orphans); err != nil {
+						a.reporter.Warning(fmt.Sprintf("Orphan cleanup warning: %v", err))
+					}
 				}
 			}
 		}
@@ -205,7 +226,8 @@ func (a *App) Apply(profileName string, opts ApplyOpts) error {
 		for _, target := range targets {
 			source := resolved.Configs[target]
 
-			if err := deploy.ValidateSourcePath(source, opts.ConfigDir); err != nil {
+			sourceSpec, err := deploy.ResolveSourcePath(source, resolved.ConfigMeta[target], opts.ConfigDir)
+			if err != nil {
 				if opts.SkipFailure {
 					a.reporter.Warning(fmt.Sprintf("Skipping config %s: %v", target, err))
 					continue
@@ -224,7 +246,7 @@ func (a *App) Apply(profileName string, opts ApplyOpts) error {
 				return fmt.Errorf("config deployment failed: %w", err)
 			}
 
-			_, err = deployer.DeployOne(expandedTarget, source, opts.Force)
+			_, err = deployer.DeployOne(expandedTarget, sourceSpec, opts.Force)
 			if err != nil {
 				if opts.SkipFailure {
 					a.reporter.Warning(fmt.Sprintf("Config deploy warning: %v", err))
@@ -286,6 +308,9 @@ func (a *App) Apply(profileName string, opts ApplyOpts) error {
 
 	// Carry forward results from previous state for skipped stages
 	configResults := deployer.Deployed()
+	if prevState != nil && prevState.Profile == profileName && stages["configs"] {
+		configResults = mergeConfigResults(prevConfigs, deployer.Deployed(), currentConfigTargets, preserveAllPreviousConfigs)
+	}
 	if !stages["configs"] && prevState != nil {
 		configResults = prevState.Configs
 	}
@@ -296,9 +321,14 @@ func (a *App) Apply(profileName string, opts ApplyOpts) error {
 		aiState = prevState.AI
 	}
 
+	appliedProfile := profileName
+	if prevState != nil && !stages["configs"] {
+		appliedProfile = prevState.Profile
+	}
+
 	// Write final state
 	applyState := &ApplyState{
-		Profile:      profileName,
+		Profile:      appliedProfile,
 		AppliedAt:    time.Now().UTC(),
 		FacetVersion: a.version,
 		Packages:     pkgResults,
@@ -317,7 +347,7 @@ func (a *App) Apply(profileName string, opts ApplyOpts) error {
 }
 
 // runScripts executes a list of scripts sequentially. Fails fast on first error.
-func (a *App) runScripts(scripts []profile.ScriptEntry, configDir, stageName string) error {
+func (a *App) runScripts(scripts []profile.ScriptEntry, fallbackDir, stageName string) error {
 	if len(scripts) == 0 {
 		return nil
 	}
@@ -326,7 +356,11 @@ func (a *App) runScripts(scripts []profile.ScriptEntry, configDir, stageName str
 	}
 
 	for _, script := range scripts {
-		if err := a.scriptRunner.Run(script.Run, configDir); err != nil {
+		dir := script.WorkDir
+		if dir == "" {
+			dir = fallbackDir
+		}
+		if err := a.scriptRunner.Run(script.Run, dir); err != nil {
 			return fmt.Errorf("%s script %q failed: %w", stageName, script.Name, err)
 		}
 	}
@@ -339,4 +373,29 @@ func isEmptyAIState(state *ai.AIState) bool {
 		return true
 	}
 	return len(state.Skills) == 0 && len(state.MCPs) == 0 && len(state.Permissions) == 0
+}
+
+func mergeConfigResults(prevConfigs, deployedConfigs []deploy.ConfigResult, keepTargets map[string]bool, preserveAllPrevious bool) []deploy.ConfigResult {
+	merged := make(map[string]deploy.ConfigResult, len(prevConfigs)+len(deployedConfigs))
+
+	for _, cfg := range prevConfigs {
+		if preserveAllPrevious || keepTargets[cfg.Target] {
+			merged[cfg.Target] = cfg
+		}
+	}
+	for _, cfg := range deployedConfigs {
+		merged[cfg.Target] = cfg
+	}
+
+	targets := make([]string, 0, len(merged))
+	for target := range merged {
+		targets = append(targets, target)
+	}
+	sort.Strings(targets)
+
+	results := make([]deploy.ConfigResult, 0, len(targets))
+	for _, target := range targets {
+		results = append(results, merged[target])
+	}
+	return results
 }
