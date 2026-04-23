@@ -11,3 +11,4 @@ func (m *mockReporter) Error(msg string)       { m.messages = append(m.messages,
 func (m *mockReporter) Header(msg string)      { m.messages = append(m.messages, "header: "+msg) }
 func (m *mockReporter) PrintLine(msg string)   { m.messages = append(m.messages, "line: "+msg) }
 func (m *mockReporter) Dim(text string) string { return text }
+func (m *mockReporter) Progress(msg string)    { m.messages = append(m.messages, "progress: "+msg) }

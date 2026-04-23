@@ -83,6 +83,8 @@ func (a *App) Apply(profileName string, opts ApplyOpts) error {
 		return fmt.Errorf("Not a facet config directory (facet.yaml not found). Use -c to specify the config directory, or run facet scaffold to create one.\n  detail: %w", err)
 	}
 
+	a.reporter.Progress("Loading profile")
+
 	// Step 2: Load profile
 	profilePath := filepath.Join(opts.ConfigDir, "profiles", profileName+".yaml")
 	profileCfg, err := a.loader.LoadConfig(profilePath)
@@ -97,6 +99,7 @@ func (a *App) Apply(profileName string, opts ApplyOpts) error {
 	if a.baseResolver == nil {
 		return fmt.Errorf("base resolver is not configured")
 	}
+	a.reporter.Progress("Resolving extends")
 	resolvedBase, err := a.baseResolver.Resolve(profileCfg.Extends, opts.ConfigDir)
 	if err != nil {
 		return fmt.Errorf("cannot resolve extends %q: %w", profileCfg.Extends, err)
@@ -117,6 +120,7 @@ func (a *App) Apply(profileName string, opts ApplyOpts) error {
 	profile.AnnotateLayer(localCfg, opts.ConfigDir, false)
 
 	// Step 4: Merge layers
+	a.reporter.Progress("Merging layers")
 	merged, err := profile.Merge(baseCfg, profileCfg)
 	if err != nil {
 		return fmt.Errorf("merge error: %w", err)
@@ -167,7 +171,17 @@ func (a *App) Apply(profileName string, opts ApplyOpts) error {
 	if prevState != nil {
 		shouldUnapply := opts.Force || prevState.Profile != profileName
 		if shouldUnapply {
-			if stages["ai"] && a.aiOrchestrator != nil && prevState.AI != nil {
+			willUnapplyConfigs := stages["configs"] && len(prevState.Configs) > 0
+			willUnapplyAI := stages["ai"] && a.aiOrchestrator != nil && prevState.AI != nil
+			if willUnapplyConfigs || willUnapplyAI {
+				a.reporter.Progress("Unapplying previous state")
+			}
+			if willUnapplyConfigs {
+				for _, cfg := range prevState.Configs {
+					a.reporter.Progress(fmt.Sprintf("  → remove %s", cfg.Target))
+				}
+			}
+			if willUnapplyAI {
 				if err := a.aiOrchestrator.Unapply(prevState.AI); err != nil {
 					a.reporter.Error(fmt.Sprintf("AI unapply failed: %v", err))
 				}
@@ -202,6 +216,10 @@ func (a *App) Apply(profileName string, opts ApplyOpts) error {
 					}
 				}
 				if len(orphans) > 0 {
+					a.reporter.Progress("Cleaning up orphaned configs")
+					for _, cfg := range orphans {
+						a.reporter.Progress(fmt.Sprintf("  → remove %s", cfg.Target))
+					}
 					orphanDeployer := a.deployerFactory(opts.ConfigDir, "", nil, nil)
 					if err := orphanDeployer.Unapply(orphans); err != nil {
 						a.reporter.Warning(fmt.Sprintf("Orphan cleanup warning: %v", err))
@@ -214,7 +232,8 @@ func (a *App) Apply(profileName string, opts ApplyOpts) error {
 	// Step 8: Deploy configs (sorted for deterministic order)
 	deployer := a.deployerFactory(opts.ConfigDir, "", resolved.Vars, prevConfigs)
 
-	if stages["configs"] {
+	if stages["configs"] && len(resolved.Configs) > 0 {
+		a.reporter.Progress("Deploying configs")
 		var deployErr error
 
 		targets := make([]string, 0, len(resolved.Configs))
@@ -224,6 +243,7 @@ func (a *App) Apply(profileName string, opts ApplyOpts) error {
 		sort.Strings(targets)
 
 		for _, target := range targets {
+			a.reporter.Progress(fmt.Sprintf("  → %s", target))
 			source := resolved.Configs[target]
 
 			sourceSpec, err := deploy.ResolveSourcePath(source, resolved.ConfigMeta[target], opts.ConfigDir)
@@ -270,6 +290,9 @@ func (a *App) Apply(profileName string, opts ApplyOpts) error {
 
 	// Stage: pre_apply
 	if stages["pre_apply"] {
+		if len(resolved.PreApply) > 0 {
+			a.reporter.Progress("Running pre_apply scripts")
+		}
 		if err := a.runScripts(resolved.PreApply, opts.ConfigDir, "pre_apply"); err != nil {
 			return err
 		}
@@ -278,11 +301,20 @@ func (a *App) Apply(profileName string, opts ApplyOpts) error {
 	// Stage: packages
 	var pkgResults []packages.PackageResult
 	if stages["packages"] {
+		if len(resolved.Packages) > 0 {
+			a.reporter.Progress("Installing packages")
+			for _, pkg := range resolved.Packages {
+				a.reporter.Progress(fmt.Sprintf("  → %s", pkg.Name))
+			}
+		}
 		pkgResults = a.installer.InstallAll(resolved.Packages)
 	}
 
 	// Stage: post_apply
 	if stages["post_apply"] {
+		if len(resolved.PostApply) > 0 {
+			a.reporter.Progress("Running post_apply scripts")
+		}
 		if err := a.runScripts(resolved.PostApply, opts.ConfigDir, "post_apply"); err != nil {
 			return err
 		}
@@ -290,19 +322,16 @@ func (a *App) Apply(profileName string, opts ApplyOpts) error {
 
 	// Stage: ai
 	var aiState *ai.AIState
-	if stages["ai"] {
-		if a.aiOrchestrator != nil {
-			effectiveAI := ai.Resolve(resolved.AI)
-			if effectiveAI != nil || prevAIState != nil {
-				var aiErr error
-				aiState, aiErr = a.aiOrchestrator.Apply(effectiveAI, prevAIState)
-				if aiErr != nil {
-					a.reporter.Error(fmt.Sprintf("AI configuration failed: %v", aiErr))
-				}
-				if isEmptyAIState(aiState) {
-					aiState = nil
-				}
-			}
+	effectiveAI := ai.Resolve(resolved.AI)
+	if stages["ai"] && a.aiOrchestrator != nil && (effectiveAI != nil || prevAIState != nil) {
+		a.reporter.Progress("Applying AI configuration")
+		var aiErr error
+		aiState, aiErr = a.aiOrchestrator.Apply(effectiveAI, prevAIState)
+		if aiErr != nil {
+			a.reporter.Error(fmt.Sprintf("AI configuration failed: %v", aiErr))
+		}
+		if isEmptyAIState(aiState) {
+			aiState = nil
 		}
 	}
 
@@ -356,6 +385,7 @@ func (a *App) runScripts(scripts []profile.ScriptEntry, fallbackDir, stageName s
 	}
 
 	for _, script := range scripts {
+		a.reporter.Progress(fmt.Sprintf("  → %s", script.Name))
 		dir := script.WorkDir
 		if dir == "" {
 			dir = fallbackDir

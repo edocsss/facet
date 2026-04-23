@@ -19,8 +19,9 @@ const (
 
 // Reporter handles formatted terminal output.
 type Reporter struct {
-	w     io.Writer
-	color bool
+	w       io.Writer
+	color   bool
+	verbose bool
 }
 
 // New creates a new Reporter.
@@ -63,6 +64,19 @@ func (r *Reporter) Header(msg string) {
 
 // PrintLine prints a formatted line.
 func (r *Reporter) PrintLine(msg string) {
+	fmt.Fprintf(r.w, "%s\n", msg)
+}
+
+// SetVerbose enables or disables progress output.
+func (r *Reporter) SetVerbose(verbose bool) {
+	r.verbose = verbose
+}
+
+// Progress prints a progress message when verbose mode is enabled.
+func (r *Reporter) Progress(msg string) {
+	if !r.verbose {
+		return
+	}
 	fmt.Fprintf(r.w, "%s\n", msg)
 }
 

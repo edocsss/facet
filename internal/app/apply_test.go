@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -1265,4 +1266,288 @@ func TestApply_SameProfileInvalidTargetDoesNotTriggerOrphanCleanup(t *testing.T)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "undefined environment variable")
 	assert.Empty(t, mockDep.unapply)
+}
+
+func TestApply_EmitsProgressMessages(t *testing.T) {
+	cfgDir := t.TempDir()
+	stateDir := t.TempDir()
+
+	require.NoError(t, os.MkdirAll(filepath.Join(cfgDir, "configs"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cfgDir, "configs", ".zshrc"), []byte("# zshrc"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, ".local.yaml"), []byte(""), 0o644))
+
+	r := &mockReporter{}
+	mockDep := &mockDeployer{}
+	stateStore := &mockStateStore{}
+	baseCfg := &profile.FacetConfig{}
+
+	targetPath := filepath.Join(stateDir, ".zshrc")
+	loader := &mockLoader{
+		meta: &profile.FacetMeta{},
+		configs: map[string]*profile.FacetConfig{
+			filepath.Join(cfgDir, "base.yaml"): baseCfg,
+			filepath.Join(cfgDir, "profiles", "work.yaml"): {
+				Extends: "base",
+				Configs: map[string]string{
+					targetPath: "configs/.zshrc",
+				},
+				Packages: []profile.PackageEntry{
+					{Name: "git", Install: profile.InstallCmd{Command: "brew install git"}},
+				},
+				PreApply: []profile.ScriptEntry{
+					{Name: "setup", Run: "echo setup"},
+				},
+				PostApply: []profile.ScriptEntry{
+					{Name: "teardown", Run: "echo teardown"},
+				},
+			},
+			filepath.Join(stateDir, ".local.yaml"): {},
+		},
+	}
+
+	a := New(Deps{
+		Reporter:     r,
+		Loader:       loader,
+		BaseResolver: newStaticBaseResolver(baseCfg),
+		Installer:    &mockInstaller{},
+		StateStore:   stateStore,
+		ScriptRunner: &mockScriptRunner{},
+		DeployerFactory: func(configDir, homeDir string, vars map[string]any, ownedConfigs []deploy.ConfigResult) deploy.Service {
+			return mockDep
+		},
+		OSName: "macos",
+	})
+
+	err := a.Apply("work", ApplyOpts{
+		ConfigDir: cfgDir,
+		StateDir:  stateDir,
+	})
+	require.NoError(t, err)
+
+	var progressMessages []string
+	for _, msg := range r.messages {
+		if strings.HasPrefix(msg, "progress: ") {
+			progressMessages = append(progressMessages, msg)
+		}
+	}
+
+	assert.Contains(t, progressMessages, "progress: Loading profile")
+	assert.Contains(t, progressMessages, "progress: Resolving extends")
+	assert.Contains(t, progressMessages, "progress: Merging layers")
+	assert.Contains(t, progressMessages, "progress: Deploying configs")
+	assert.Contains(t, progressMessages, "progress:   → "+targetPath)
+	assert.Contains(t, progressMessages, "progress: Installing packages")
+	assert.Contains(t, progressMessages, "progress:   → git")
+	assert.Contains(t, progressMessages, "progress: Running pre_apply scripts")
+	assert.Contains(t, progressMessages, "progress:   → setup")
+	assert.Contains(t, progressMessages, "progress: Running post_apply scripts")
+	assert.Contains(t, progressMessages, "progress:   → teardown")
+}
+
+func TestApply_EmitsUnapplyProgress_OnForce(t *testing.T) {
+	cfgDir := t.TempDir()
+	stateDir := t.TempDir()
+
+	require.NoError(t, os.MkdirAll(filepath.Join(cfgDir, "configs"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cfgDir, "configs", ".zshrc"), []byte("# zshrc"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, ".local.yaml"), []byte(""), 0o644))
+
+	prevTarget := filepath.Join(stateDir, ".zshrc")
+	r := &mockReporter{}
+	mockDep := &mockDeployer{}
+	baseCfg := &profile.FacetConfig{}
+	loader := &mockLoader{
+		meta: &profile.FacetMeta{},
+		configs: map[string]*profile.FacetConfig{
+			filepath.Join(cfgDir, "base.yaml"): baseCfg,
+			filepath.Join(cfgDir, "profiles", "work.yaml"): {
+				Extends: "base",
+				Configs: map[string]string{prevTarget: "configs/.zshrc"},
+			},
+			filepath.Join(stateDir, ".local.yaml"): {},
+		},
+	}
+
+	stateStore := &mockStateStore{
+		state: &ApplyState{
+			Profile: "work",
+			Configs: []deploy.ConfigResult{
+				{Target: prevTarget, Source: "configs/.zshrc", Strategy: deploy.StrategySymlink},
+			},
+		},
+	}
+
+	a := New(Deps{
+		Reporter:     r,
+		Loader:       loader,
+		BaseResolver: newStaticBaseResolver(baseCfg),
+		Installer:    &mockInstaller{},
+		StateStore:   stateStore,
+		DeployerFactory: func(configDir, homeDir string, vars map[string]any, ownedConfigs []deploy.ConfigResult) deploy.Service {
+			return mockDep
+		},
+		OSName: "macos",
+	})
+
+	err := a.Apply("work", ApplyOpts{
+		ConfigDir: cfgDir,
+		StateDir:  stateDir,
+		Force:     true,
+	})
+	require.NoError(t, err)
+
+	var progressMessages []string
+	for _, msg := range r.messages {
+		if strings.HasPrefix(msg, "progress: ") {
+			progressMessages = append(progressMessages, msg)
+		}
+	}
+
+	assert.Contains(t, progressMessages, "progress: Unapplying previous state")
+	assert.Contains(t, progressMessages, "progress:   → remove "+prevTarget)
+}
+
+func TestApply_ForceWithNonUnapplyStages_SkipsUnapplyProgress(t *testing.T) {
+	cfgDir := t.TempDir()
+	stateDir := t.TempDir()
+
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, ".local.yaml"), []byte(""), 0o644))
+
+	r := &mockReporter{}
+	baseCfg := &profile.FacetConfig{}
+	loader := &mockLoader{
+		meta: &profile.FacetMeta{},
+		configs: map[string]*profile.FacetConfig{
+			filepath.Join(cfgDir, "base.yaml"): baseCfg,
+			filepath.Join(cfgDir, "profiles", "work.yaml"): {
+				Extends: "base",
+				Packages: []profile.PackageEntry{
+					{Name: "git", Install: profile.InstallCmd{Command: "brew install git"}},
+				},
+			},
+			filepath.Join(stateDir, ".local.yaml"): {},
+		},
+	}
+
+	a := New(Deps{
+		Reporter:     r,
+		Loader:       loader,
+		BaseResolver: newStaticBaseResolver(baseCfg),
+		Installer:    &mockInstaller{},
+		StateStore: &mockStateStore{state: &ApplyState{
+			Profile: "work",
+			Configs: []deploy.ConfigResult{
+				{Target: filepath.Join(stateDir, ".zshrc"), Source: "configs/.zshrc", Strategy: deploy.StrategySymlink},
+			},
+		}},
+		DeployerFactory: func(configDir, homeDir string, vars map[string]any, ownedConfigs []deploy.ConfigResult) deploy.Service {
+			return &mockDeployer{}
+		},
+		OSName: "macos",
+	})
+
+	err := a.Apply("work", ApplyOpts{
+		ConfigDir: cfgDir,
+		StateDir:  stateDir,
+		Force:     true,
+		Stages:    "packages",
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, r.messages, "progress: Unapplying previous state")
+}
+
+func TestApply_EmitsOrphanCleanupProgress(t *testing.T) {
+	cfgDir := t.TempDir()
+	stateDir := t.TempDir()
+
+	require.NoError(t, os.MkdirAll(filepath.Join(cfgDir, "configs"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cfgDir, "configs", ".zshrc"), []byte("# zshrc"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, ".local.yaml"), []byte(""), 0o644))
+
+	orphanTarget := filepath.Join(stateDir, ".oldrc")
+	activeTarget := filepath.Join(stateDir, ".zshrc")
+	r := &mockReporter{}
+	mockDep := &mockDeployer{}
+	baseCfg := &profile.FacetConfig{}
+	loader := &mockLoader{
+		meta: &profile.FacetMeta{},
+		configs: map[string]*profile.FacetConfig{
+			filepath.Join(cfgDir, "base.yaml"): baseCfg,
+			filepath.Join(cfgDir, "profiles", "work.yaml"): {
+				Extends: "base",
+				Configs: map[string]string{
+					activeTarget: "configs/.zshrc",
+				},
+			},
+			filepath.Join(stateDir, ".local.yaml"): {},
+		},
+	}
+
+	a := New(Deps{
+		Reporter:     r,
+		Loader:       loader,
+		BaseResolver: newStaticBaseResolver(baseCfg),
+		Installer:    &mockInstaller{},
+		StateStore: &mockStateStore{state: &ApplyState{
+			Profile: "work",
+			Configs: []deploy.ConfigResult{
+				{Target: orphanTarget, Source: "configs/.oldrc", Strategy: deploy.StrategySymlink},
+			},
+		}},
+		DeployerFactory: func(configDir, homeDir string, vars map[string]any, ownedConfigs []deploy.ConfigResult) deploy.Service {
+			return mockDep
+		},
+		OSName: "macos",
+	})
+
+	err := a.Apply("work", ApplyOpts{
+		ConfigDir: cfgDir,
+		StateDir:  stateDir,
+	})
+	require.NoError(t, err)
+	assert.Contains(t, r.messages, "progress: Cleaning up orphaned configs")
+	assert.Contains(t, r.messages, "progress:   → remove "+orphanTarget)
+	require.Len(t, mockDep.unapply, 1)
+	assert.Equal(t, orphanTarget, mockDep.unapply[0][0].Target)
+}
+
+func TestApply_SkipsEmptyStageProgressMessages(t *testing.T) {
+	cfgDir := t.TempDir()
+	stateDir := t.TempDir()
+
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, ".local.yaml"), []byte(""), 0o644))
+
+	r := &mockReporter{}
+	baseCfg := &profile.FacetConfig{}
+	loader := &mockLoader{
+		meta: &profile.FacetMeta{},
+		configs: map[string]*profile.FacetConfig{
+			filepath.Join(cfgDir, "base.yaml"): baseCfg,
+			filepath.Join(cfgDir, "profiles", "work.yaml"): {
+				Extends: "base",
+			},
+			filepath.Join(stateDir, ".local.yaml"): {},
+		},
+	}
+
+	a := New(Deps{
+		Reporter:     r,
+		Loader:       loader,
+		BaseResolver: newStaticBaseResolver(baseCfg),
+		Installer:    &mockInstaller{},
+		StateStore:   &mockStateStore{},
+		DeployerFactory: func(configDir, homeDir string, vars map[string]any, ownedConfigs []deploy.ConfigResult) deploy.Service {
+			return &mockDeployer{}
+		},
+		OSName: "macos",
+	})
+
+	err := a.Apply("work", ApplyOpts{
+		ConfigDir: cfgDir,
+		StateDir:  stateDir,
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, r.messages, "progress: Deploying configs")
+	assert.NotContains(t, r.messages, "progress: Installing packages")
+	assert.NotContains(t, r.messages, "progress: Applying AI configuration")
 }

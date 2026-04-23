@@ -407,6 +407,7 @@ If a config deployment fails (and `--skip-failure` is not set), facet rolls back
 |---|---|---|---|
 | `--config-dir` | `-c` | Current working directory | Path to the facet config repo |
 | `--state-dir` | `-s` | `~/.facet/` | Path to the machine-local state directory |
+| `--verbose` | `-v` | false | Stream stage and item progress during apply |
 
 ### facet init
 
@@ -433,6 +434,7 @@ Applies a profile. See Section 8 for the full apply model. The base from `extend
 - `--dry-run` — preview what would happen without making changes
 - `--force` — unapply + apply, skip prompts
 - `--skip-failure` — warn on config deploy failure instead of rollback
+- `--verbose` / `-v` — stream stage and item progress as apply runs
 
 **Exit codes:**
 - 0: success
