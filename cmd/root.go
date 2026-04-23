@@ -9,18 +9,32 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// VerboseSetter allows the cmd layer to configure verbose progress output
+// after persistent flags have been parsed.
+type VerboseSetter interface {
+	SetVerbose(bool)
+}
+
 // NewRootCmd builds the full command tree and returns the root command.
-func NewRootCmd(application *app.App) *cobra.Command {
+func NewRootCmd(application *app.App, verboseSetter VerboseSetter) *cobra.Command {
 	var configDir, stateDir string
+	var verbose bool
 
 	rootCmd := &cobra.Command{
 		Use:     "facet",
 		Short:   "Developer environment configuration manager",
 		Version: "0.1.0",
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			if verboseSetter != nil {
+				verboseSetter.SetVerbose(verbose)
+			}
+			return nil
+		},
 	}
 
 	rootCmd.PersistentFlags().StringVarP(&configDir, "config-dir", "c", "", "Path to facet config repo (default: current directory)")
 	rootCmd.PersistentFlags().StringVarP(&stateDir, "state-dir", "s", "", "Path to machine-local state directory (default: ~/.facet)")
+	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Show stage-by-stage progress during apply")
 
 	rootCmd.AddCommand(newApplyCmd(application, &configDir, &stateDir))
 	rootCmd.AddCommand(newDocsCmd())

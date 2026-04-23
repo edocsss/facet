@@ -9,7 +9,7 @@ import (
 )
 
 func TestRootCmd_DocsOverviewWritesToConfiguredOutput(t *testing.T) {
-	rootCmd := NewRootCmd(nil)
+	rootCmd := NewRootCmd(nil, nil)
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -25,7 +25,7 @@ func TestRootCmd_DocsOverviewWritesToConfiguredOutput(t *testing.T) {
 }
 
 func TestRootCmd_DocsTopicWritesToConfiguredOutput(t *testing.T) {
-	rootCmd := NewRootCmd(nil)
+	rootCmd := NewRootCmd(nil, nil)
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -40,7 +40,7 @@ func TestRootCmd_DocsTopicWritesToConfiguredOutput(t *testing.T) {
 }
 
 func TestRootCmd_DocsUnknownTopicReturnsError(t *testing.T) {
-	rootCmd := NewRootCmd(nil)
+	rootCmd := NewRootCmd(nil, nil)
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

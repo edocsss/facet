@@ -85,7 +85,7 @@ func main() {
 	})
 
 	// Build command tree and execute
-	rootCmd := cmd.NewRootCmd(application)
+	rootCmd := cmd.NewRootCmd(application, r)
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

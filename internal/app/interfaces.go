@@ -25,6 +25,7 @@ type Reporter interface {
 	Header(msg string)
 	PrintLine(msg string)
 	Dim(text string) string
+	Progress(msg string)
 }
 
 // StateStore handles reading and writing apply state.

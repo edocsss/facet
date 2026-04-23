@@ -246,6 +246,7 @@ The main event. Resolves the base from `extends`, merges layers, deploys configs
 facet apply work
 facet apply work --dry-run         # preview what would happen, no side effects
 facet apply work --force           # overwrite conflicting unmanaged files
+facet apply work --verbose         # stream stage-by-stage progress
 facet apply work --skip-failure    # warn on deploy errors instead of rolling back
 facet apply work --stages configs,packages  # run only specific stages
 ```
@@ -270,6 +271,7 @@ facet status
 |---|---|---|---|
 | `--config-dir` | `-c` | current directory | Path to facet config repo |
 | `--state-dir` | `-s` | `~/.facet` | Machine-local state directory |
+| `--verbose` | `-v` | false | Stream stage and item progress during apply |
 
 ## Design Principles
 
