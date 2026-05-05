@@ -6,6 +6,16 @@ source "$SUITE_DIR/helpers.sh"
 setup_basic
 bash "$FIXTURE_DIR/setup-ai.sh"
 
+mkdir -p "$HOME/.agents"
+cat > "$HOME/.agents/.skill-lock.json" << 'JSON'
+{
+  "version": 3,
+  "skills": {
+    "frontend-design": {"source": "@vercel-labs/agent-skills", "sourceUrl": "https://github.com/vercel-labs/agent-skills.git"}
+  }
+}
+JSON
+
 # Test 1: Apply with AI config
 facet_apply work
 echo "  apply with AI config exited cleanly"

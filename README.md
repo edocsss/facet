@@ -219,7 +219,7 @@ ai:
       args: ["@anthropic/mcp-playwright"]
 ```
 
-Skills without an explicit `agents` list default to `claude-code`, `cursor`, and `codex`. Skills are always installed globally (`-g`). Source formats include GitHub repos, SSH URLs for private repos, and local paths. When a skill entry is removed or narrowed on a later `facet apply`, facet also removes the no-longer-declared skills for that source and agent scope, including entries originally installed with `--all`. MCP servers are registered for Claude Code at user scope (`claude mcp add --scope user`), so they are available across every project on the machine; Cursor and Codex MCPs are written to each agent's own config file. See `facet docs ai` for details.
+Skills without an explicit `agents` list default to `claude-code`, `cursor`, and `codex`. Skills are always installed globally (`-g`). Source formats include GitHub repos, SSH URLs for private repos, and local paths. After named-skill installs, facet records only skills confirmed in `~/.agents/.skill-lock.json` and warns for requested names that are missing from the lock; if the lock cannot be read, facet warns and records the requested names as a fallback. When a skill entry is removed or narrowed on a later `facet apply`, facet also removes the no-longer-declared skills for that source and agent scope, including entries originally installed with `--all`. MCP servers are registered for Claude Code at user scope (`claude mcp add --scope user`), so they are available across every project on the machine; Cursor and Codex MCPs are written to each agent's own config file. See `facet docs ai` for details.
 
 Manage installed skills with:
 

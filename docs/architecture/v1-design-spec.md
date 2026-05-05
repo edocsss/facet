@@ -486,6 +486,15 @@ AI skill reconciliation is stateful: when a previously managed source is removed
 or narrowed on a later apply, facet removes only the no-longer-declared skills
 for the affected agents before recording the new state.
 
+After installing named skills, facet post-verifies each requested name against
+the skill lock (`~/.agents/.skill-lock.json`). Only names confirmed present in
+the lock are recorded in state. Missing names produce a non-fatal warning and are
+excluded from state, preventing phantom orphan-removal entries on future applies.
+If the lock is unreadable, facet falls back to recording all requested names and
+warns. This mirrors the "all skills" path by recording only names confirmed by
+the lock; named installs additionally fall back to requested names on read error
+because those names are available.
+
 ---
 
 ## 12. Non-Requirements (v1)

@@ -286,6 +286,7 @@ func (o *Orchestrator) applySkills(config EffectiveAIConfig, previousState *AISt
 		}
 
 		recordedSkills := skills
+		verifiedViaLock := true
 		if allGroups[gk] {
 			resolvedSkills, err := o.skillsManager.InstalledForSource(gk.source)
 			if err != nil {
@@ -296,6 +297,29 @@ func (o *Orchestrator) applySkills(config EffectiveAIConfig, previousState *AISt
 				recordedSkills = nil
 			} else {
 				recordedSkills = resolvedSkills
+			}
+		} else {
+			verified, err := o.skillsManager.InstalledForSource(gk.source)
+			if err != nil {
+				o.reporter.Warning(fmt.Sprintf("installed skills from %q but could not verify via skill lock: %v - recording requested names", gk.source, err))
+				verifiedViaLock = false
+			} else {
+				verifiedSet := make(map[string]struct{}, len(verified))
+				for _, s := range verified {
+					verifiedSet[s] = struct{}{}
+				}
+				var confirmed, missing []string
+				for _, s := range skills {
+					if _, ok := verifiedSet[s]; ok {
+						confirmed = append(confirmed, s)
+					} else {
+						missing = append(missing, s)
+					}
+				}
+				if len(missing) > 0 {
+					o.reporter.Warning(fmt.Sprintf("skills %v from %q were not found in the skill lock after install - they may not exist in the source", missing, gk.source))
+				}
+				recordedSkills = confirmed
 			}
 		}
 
@@ -309,9 +333,13 @@ func (o *Orchestrator) applySkills(config EffectiveAIConfig, previousState *AISt
 		}
 		if allGroups[gk] {
 			o.reporter.Success(fmt.Sprintf("installed all skills from %s", gk.source))
-		} else {
-			sort.Strings(skills)
-			o.reporter.Success(fmt.Sprintf("installed skills %v from %s", skills, gk.source))
+		} else if len(recordedSkills) > 0 {
+			sort.Strings(recordedSkills)
+			if verifiedViaLock {
+				o.reporter.Success(fmt.Sprintf("installed skills %v from %s", recordedSkills, gk.source))
+			} else {
+				o.reporter.Success(fmt.Sprintf("installed skills %v from %s (unverified)", recordedSkills, gk.source))
+			}
 		}
 	}
 }
