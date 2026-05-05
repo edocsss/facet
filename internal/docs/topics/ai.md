@@ -75,6 +75,12 @@ removed or narrowed to fewer skills, facet removes the no-longer-declared skills
 for the affected agents before writing the new state. This includes entries that
 were previously installed as "all skills from this source."
 
+After installing named skills, facet verifies each one against the skill lock
+(`~/.agents/.skill-lock.json`). Skills that are absent from the lock after
+install are not recorded in state and trigger a warning; they may not exist in
+the source. If the lock file is unreadable, facet records the requested names as
+a fallback and warns.
+
 ### Skill Source Formats
 
 The `source` field supports any format accepted by the skills CLI:

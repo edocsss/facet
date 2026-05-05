@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -103,6 +104,57 @@ func (m *mockReporter) Header(_ string)        {}
 func (m *mockReporter) PrintLine(_ string)     {}
 func (m *mockReporter) Dim(text string) string { return text }
 
+type capturingReporter struct {
+	warnings  []string
+	successes []string
+}
+
+func (c *capturingReporter) Success(msg string)     { c.successes = append(c.successes, msg) }
+func (c *capturingReporter) Warning(msg string)     { c.warnings = append(c.warnings, msg) }
+func (c *capturingReporter) Error(_ string)         {}
+func (c *capturingReporter) Header(_ string)        {}
+func (c *capturingReporter) PrintLine(_ string)     {}
+func (c *capturingReporter) Dim(text string) string { return text }
+
+func installSuccesses(successes []string) []string {
+	var installMessages []string
+	for _, success := range successes {
+		if strings.Contains(success, "installed skills") {
+			installMessages = append(installMessages, success)
+		}
+	}
+	return installMessages
+}
+
+// errInstalledForSourceSkillsMgr always succeeds Install but returns an error
+// from InstalledForSource, simulating an unreadable skill lock.
+type errInstalledForSourceSkillsMgr struct {
+	installed []struct {
+		source string
+		skills []string
+		agents []string
+	}
+	installedForSourceErr error
+}
+
+func (m *errInstalledForSourceSkillsMgr) Install(source string, skills []string, agents []string) error {
+	m.installed = append(m.installed, struct {
+		source string
+		skills []string
+		agents []string
+	}{source: source, skills: skills, agents: agents})
+	return nil
+}
+
+func (m *errInstalledForSourceSkillsMgr) Remove(_ []string, _ []string) error { return nil }
+
+func (m *errInstalledForSourceSkillsMgr) InstalledForSource(_ string) ([]string, error) {
+	return nil, m.installedForSourceErr
+}
+
+func (m *errInstalledForSourceSkillsMgr) Check() error  { return nil }
+func (m *errInstalledForSourceSkillsMgr) Update() error { return nil }
+
 type orderTracker struct {
 	calls []string
 }
@@ -160,8 +212,9 @@ func (t *trackingSkillsMgr) Check() error  { return nil }
 func (t *trackingSkillsMgr) Update() error { return nil }
 
 type selectiveSkillsMgr struct {
-	failSource string
-	installed  []struct {
+	failSource   string
+	sourceSkills map[string][]string
+	installed    []struct {
 		source string
 		skills []string
 		agents []string
@@ -192,8 +245,8 @@ func (s *selectiveSkillsMgr) Remove(skills []string, agents []string) error {
 	return nil
 }
 
-func (s *selectiveSkillsMgr) InstalledForSource(_ string) ([]string, error) {
-	return nil, nil
+func (s *selectiveSkillsMgr) InstalledForSource(source string) ([]string, error) {
+	return append([]string{}, s.sourceSkills[source]...), nil
 }
 
 func (s *selectiveSkillsMgr) Check() error  { return nil }
@@ -235,7 +288,11 @@ func TestOrchestrator_Apply_Permissions(t *testing.T) {
 }
 
 func TestOrchestrator_Apply_SkillOrphanRemoval(t *testing.T) {
-	skillsMgr := &mockSkillsMgr{}
+	skillsMgr := &mockSkillsMgr{
+		sourceSkills: map[string][]string{
+			"@org/skills": {"skill-1"},
+		},
+	}
 	orch := NewOrchestrator(
 		map[string]AgentProvider{"claude-code": &mockProvider{name: "claude-code"}},
 		skillsMgr,
@@ -488,7 +545,12 @@ func TestOrchestrator_Apply_MCPRegistrationPartialFailure(t *testing.T) {
 }
 
 func TestOrchestrator_Apply_SameSkillNameDifferentSources(t *testing.T) {
-	skillsMgr := &mockSkillsMgr{}
+	skillsMgr := &mockSkillsMgr{
+		sourceSkills: map[string][]string{
+			"@org/skills-a": {"shared-name"},
+			"@org/skills-b": {"shared-name"},
+		},
+	}
 	orch := NewOrchestrator(
 		map[string]AgentProvider{"claude-code": &mockProvider{name: "claude-code"}},
 		skillsMgr,
@@ -514,7 +576,11 @@ func TestOrchestrator_Apply_SameSkillNameDifferentSources(t *testing.T) {
 }
 
 func TestOrchestrator_Apply_SkillOrphanRemoval_PerAgentDelta(t *testing.T) {
-	skillsMgr := &mockSkillsMgr{}
+	skillsMgr := &mockSkillsMgr{
+		sourceSkills: map[string][]string{
+			"@org/skills": {"frontend-design"},
+		},
+	}
 	orch := NewOrchestrator(
 		map[string]AgentProvider{
 			"claude-code": &mockProvider{name: "claude-code"},
@@ -611,7 +677,12 @@ func TestOrchestrator_Apply_Order(t *testing.T) {
 }
 
 func TestOrchestrator_Apply_SkillInstallPartialFailure(t *testing.T) {
-	ssm := &selectiveSkillsMgr{failSource: "@org/failing-skills"}
+	ssm := &selectiveSkillsMgr{
+		failSource: "@org/failing-skills",
+		sourceSkills: map[string][]string{
+			"@org/good-skills": {"skill-ok"},
+		},
+	}
 	orch := NewOrchestrator(
 		map[string]AgentProvider{"claude-code": &mockProvider{name: "claude-code"}},
 		ssm,
@@ -726,6 +797,7 @@ func TestOrchestrator_Apply_MixedAllAndSpecificSkills(t *testing.T) {
 	skillsMgr := &mockSkillsMgr{
 		sourceSkills: map[string][]string{
 			"@org/all-skills": {"skill-x", "skill-y"},
+			"@org/specific":   {"skill-a", "skill-b"},
 		},
 	}
 	orch := NewOrchestrator(
@@ -768,7 +840,7 @@ func TestOrchestrator_Apply_MixedAllAndSpecificSkills(t *testing.T) {
 	}
 
 	if len(state.Skills) != 4 {
-		t.Fatalf("expected 3 state entries, got %+v", state.Skills)
+		t.Fatalf("expected 4 state entries, got %+v", state.Skills)
 	}
 }
 
@@ -1010,5 +1082,187 @@ func TestOrchestrator_Apply_RemovesPermissionsForDroppedAgents(t *testing.T) {
 	}
 	if _, ok := state.Permissions["cursor"]; ok {
 		t.Fatalf("did not expect cursor in current permission state: %+v", state.Permissions)
+	}
+}
+
+func TestOrchestrator_Apply_NamedSkillVerification_AllConfirmed(t *testing.T) {
+	rep := &capturingReporter{}
+	skillsMgr := &mockSkillsMgr{
+		sourceSkills: map[string][]string{
+			"@org/skills": {"skill-a", "skill-b"},
+		},
+	}
+	orch := NewOrchestrator(
+		map[string]AgentProvider{"claude-code": &mockProvider{name: "claude-code"}},
+		skillsMgr,
+		rep,
+	)
+	config := EffectiveAIConfig{
+		"claude-code": {
+			Skills: []ResolvedSkill{
+				{Source: "@org/skills", Name: "skill-a"},
+				{Source: "@org/skills", Name: "skill-b"},
+			},
+		},
+	}
+	state, err := orch.Apply(config, nil)
+	if err != nil {
+		t.Fatalf("Apply returned unexpected error: %v", err)
+	}
+	if len(state.Skills) != 2 {
+		t.Fatalf("expected 2 skills in state, got %+v", state.Skills)
+	}
+	names := []string{state.Skills[0].Name, state.Skills[1].Name}
+	sort.Strings(names)
+	if names[0] != "skill-a" || names[1] != "skill-b" {
+		t.Fatalf("expected skill-a and skill-b in state, got %v", names)
+	}
+	if len(rep.warnings) != 0 {
+		t.Fatalf("expected no warnings, got: %v", rep.warnings)
+	}
+}
+
+func TestOrchestrator_Apply_NamedSkillVerification_PartialMiss(t *testing.T) {
+	rep := &capturingReporter{}
+	skillsMgr := &mockSkillsMgr{
+		sourceSkills: map[string][]string{
+			"@org/skills": {"skill-a", "skill-b"},
+		},
+	}
+	orch := NewOrchestrator(
+		map[string]AgentProvider{"claude-code": &mockProvider{name: "claude-code"}},
+		skillsMgr,
+		rep,
+	)
+	config := EffectiveAIConfig{
+		"claude-code": {
+			Skills: []ResolvedSkill{
+				{Source: "@org/skills", Name: "skill-a"},
+				{Source: "@org/skills", Name: "skill-b"},
+				{Source: "@org/skills", Name: "skill-c"},
+			},
+		},
+	}
+	state, err := orch.Apply(config, nil)
+	if err != nil {
+		t.Fatalf("Apply returned unexpected error: %v", err)
+	}
+	if len(state.Skills) != 2 {
+		t.Fatalf("expected 2 skills in state (skill-c missing), got %+v", state.Skills)
+	}
+	names := []string{state.Skills[0].Name, state.Skills[1].Name}
+	sort.Strings(names)
+	if names[0] != "skill-a" || names[1] != "skill-b" {
+		t.Fatalf("expected skill-a and skill-b in state, got %v", names)
+	}
+	if len(rep.warnings) == 0 {
+		t.Fatal("expected a warning for missing skill-c, got none")
+	}
+	found := false
+	for _, w := range rep.warnings {
+		if strings.Contains(w, "skill-c") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected warning mentioning skill-c, got: %v", rep.warnings)
+	}
+	installMessages := installSuccesses(rep.successes)
+	if len(installMessages) != 1 {
+		t.Fatalf("expected one install-success message, got: %v", rep.successes)
+	}
+	if !strings.Contains(installMessages[0], "skill-a") || !strings.Contains(installMessages[0], "skill-b") || strings.Contains(installMessages[0], "skill-c") {
+		t.Fatalf("expected success message to mention only confirmed skills, got: %v", installMessages)
+	}
+}
+
+func TestOrchestrator_Apply_NamedSkillVerification_TotalMiss(t *testing.T) {
+	rep := &capturingReporter{}
+	skillsMgr := &mockSkillsMgr{} // no sourceSkills; InstalledForSource returns len 0
+	orch := NewOrchestrator(
+		map[string]AgentProvider{"claude-code": &mockProvider{name: "claude-code"}},
+		skillsMgr,
+		rep,
+	)
+	config := EffectiveAIConfig{
+		"claude-code": {
+			Skills: []ResolvedSkill{
+				{Source: "@org/skills", Name: "skill-a"},
+				{Source: "@org/skills", Name: "skill-b"},
+			},
+		},
+	}
+	state, err := orch.Apply(config, nil)
+	if err != nil {
+		t.Fatalf("Apply returned unexpected error: %v", err)
+	}
+	if len(state.Skills) != 0 {
+		t.Fatalf("expected no skills in state (total miss), got %+v", state.Skills)
+	}
+	if len(rep.warnings) == 0 {
+		t.Fatal("expected warning for missing skills, got none")
+	}
+	found := false
+	for _, w := range rep.warnings {
+		if strings.Contains(w, "skill-a") && strings.Contains(w, "skill-b") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected warning mentioning skill-a and skill-b, got: %v", rep.warnings)
+	}
+	if installMessages := installSuccesses(rep.successes); len(installMessages) != 0 {
+		t.Fatalf("expected no install-success message, got %v", installMessages)
+	}
+}
+
+func TestOrchestrator_Apply_NamedSkillVerification_LockReadError(t *testing.T) {
+	rep := &capturingReporter{}
+	skillsMgr := &errInstalledForSourceSkillsMgr{
+		installedForSourceErr: fmt.Errorf("lock file unreadable"),
+	}
+	orch := NewOrchestrator(
+		map[string]AgentProvider{"claude-code": &mockProvider{name: "claude-code"}},
+		skillsMgr,
+		rep,
+	)
+	config := EffectiveAIConfig{
+		"claude-code": {
+			Skills: []ResolvedSkill{
+				{Source: "@org/skills", Name: "skill-a"},
+				{Source: "@org/skills", Name: "skill-b"},
+			},
+		},
+	}
+	state, err := orch.Apply(config, nil)
+	if err != nil {
+		t.Fatalf("Apply returned unexpected error: %v", err)
+	}
+	if len(state.Skills) != 2 {
+		t.Fatalf("expected fallback to record both skills, got %+v", state.Skills)
+	}
+	names := []string{state.Skills[0].Name, state.Skills[1].Name}
+	sort.Strings(names)
+	if names[0] != "skill-a" || names[1] != "skill-b" {
+		t.Fatalf("expected skill-a and skill-b in state (fallback), got %v", names)
+	}
+	if len(rep.warnings) == 0 {
+		t.Fatal("expected warning for lock read error, got none")
+	}
+	found := false
+	for _, w := range rep.warnings {
+		if strings.Contains(w, "could not verify") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected warning about lock verification failure, got: %v", rep.warnings)
+	}
+	installMessages := installSuccesses(rep.successes)
+	if len(installMessages) != 1 || !strings.Contains(installMessages[0], "unverified") {
+		t.Fatalf("expected unverified install-success message, got: %v", installMessages)
 	}
 }
