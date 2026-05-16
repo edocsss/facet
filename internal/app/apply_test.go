@@ -1331,17 +1331,20 @@ func TestApply_EmitsProgressMessages(t *testing.T) {
 		}
 	}
 
-	assert.Contains(t, progressMessages, "progress: Loading profile")
-	assert.Contains(t, progressMessages, "progress: Resolving extends")
-	assert.Contains(t, progressMessages, "progress: Merging layers")
-	assert.Contains(t, progressMessages, "progress: Deploying configs")
-	assert.Contains(t, progressMessages, "progress:   → "+targetPath)
-	assert.Contains(t, progressMessages, "progress: Installing packages")
-	assert.Contains(t, progressMessages, "progress:   → git")
-	assert.Contains(t, progressMessages, "progress: Running pre_apply scripts")
-	assert.Contains(t, progressMessages, "progress:   → setup")
-	assert.Contains(t, progressMessages, "progress: Running post_apply scripts")
-	assert.Contains(t, progressMessages, "progress:   → teardown")
+	progressOutput := strings.Join(progressMessages, "\n")
+	assert.Contains(t, progressOutput, "progress: Loading profile ... ok")
+	assert.Contains(t, progressOutput, "progress: Resolving extends ... ok")
+	assert.Contains(t, progressOutput, "progress: Merging base and profile ... ok")
+	assert.Contains(t, progressOutput, "progress: Deploying configs ... start")
+	assert.Contains(t, progressOutput, "progress:   -> "+targetPath+" ... ok")
+	assert.Contains(t, progressOutput, "progress: Installing packages ... start")
+	assert.Contains(t, progressOutput, "progress:   -> git")
+	assert.Contains(t, progressOutput, "progress: Running pre_apply scripts ... start")
+	assert.Contains(t, progressOutput, "progress:   -> setup ... ok")
+	assert.Contains(t, progressOutput, "progress: Running post_apply scripts ... start")
+	assert.Contains(t, progressOutput, "progress:   -> teardown ... ok")
+	assert.Contains(t, progressOutput, "progress: Writing state ... ok")
+	assert.Contains(t, progressOutput, "progress: facet apply work ... done")
 }
 
 func TestApply_EmitsUnapplyProgress_OnForce(t *testing.T) {

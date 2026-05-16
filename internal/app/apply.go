@@ -71,27 +71,44 @@ type ApplyOpts struct {
 }
 
 // Apply loads, merges, and applies a configuration profile.
-func (a *App) Apply(profileName string, opts ApplyOpts) error {
+func (a *App) Apply(profileName string, opts ApplyOpts) (applyErr error) {
+	applyDone := a.reporter.ProgressStart(fmt.Sprintf("facet apply %s", profileName))
+	defer func() {
+		outcome := "done"
+		if applyErr != nil {
+			outcome = "failed"
+		}
+		applyDone(outcome, applyErr)
+	}()
+
 	stages, err := parseStages(opts.Stages)
 	if err != nil {
 		return err
 	}
 
 	// Step 1: Load facet.yaml
-	_, err = a.loader.LoadMeta(opts.ConfigDir)
-	if err != nil {
-		return fmt.Errorf("Not a facet config directory (facet.yaml not found). Use -c to specify the config directory, or run facet scaffold to create one.\n  detail: %w", err)
+	var metaErr error
+	metaErr = a.reporter.ProgressStep("Loading metadata", func() error {
+		_, err = a.loader.LoadMeta(opts.ConfigDir)
+		return err
+	})
+	if metaErr != nil {
+		return fmt.Errorf("Not a facet config directory (facet.yaml not found). Use -c to specify the config directory, or run facet scaffold to create one.\n  detail: %w", metaErr)
 	}
-
-	a.reporter.Progress("Loading profile")
 
 	// Step 2: Load profile
 	profilePath := filepath.Join(opts.ConfigDir, "profiles", profileName+".yaml")
-	profileCfg, err := a.loader.LoadConfig(profilePath)
-	if err != nil {
+	var profileCfg *profile.FacetConfig
+	if err := a.reporter.ProgressStep("Loading profile", func() error {
+		var stepErr error
+		profileCfg, stepErr = a.loader.LoadConfig(profilePath)
+		return stepErr
+	}); err != nil {
 		return fmt.Errorf("cannot load profile %q: %w", profileName, err)
 	}
-	if err := profile.ValidateProfile(profileCfg); err != nil {
+	if err := a.reporter.ProgressStep("Validating profile", func() error {
+		return profile.ValidateProfile(profileCfg)
+	}); err != nil {
 		return err
 	}
 	profile.AnnotateLayer(profileCfg, opts.ConfigDir, false)
@@ -99,9 +116,12 @@ func (a *App) Apply(profileName string, opts ApplyOpts) error {
 	if a.baseResolver == nil {
 		return fmt.Errorf("base resolver is not configured")
 	}
-	a.reporter.Progress("Resolving extends")
-	resolvedBase, err := a.baseResolver.Resolve(profileCfg.Extends, opts.ConfigDir)
-	if err != nil {
+	var resolvedBase *profile.ResolvedBase
+	if err := a.reporter.ProgressStep("Resolving extends", func() error {
+		var stepErr error
+		resolvedBase, stepErr = a.baseResolver.Resolve(profileCfg.Extends, opts.ConfigDir)
+		return stepErr
+	}); err != nil {
 		return fmt.Errorf("cannot resolve extends %q: %w", profileCfg.Extends, err)
 	}
 	defer func() {
@@ -113,29 +133,45 @@ func (a *App) Apply(profileName string, opts ApplyOpts) error {
 
 	// Step 3: Load .local.yaml
 	localPath := filepath.Join(opts.StateDir, ".local.yaml")
-	localCfg, err := a.loader.LoadConfig(localPath)
-	if err != nil {
+	var localCfg *profile.FacetConfig
+	if err := a.reporter.ProgressStep("Loading local config", func() error {
+		var stepErr error
+		localCfg, stepErr = a.loader.LoadConfig(localPath)
+		return stepErr
+	}); err != nil {
 		return fmt.Errorf(".local.yaml is required in %s: %w", opts.StateDir, err)
 	}
 	profile.AnnotateLayer(localCfg, opts.ConfigDir, false)
 
 	// Step 4: Merge layers
-	a.reporter.Progress("Merging layers")
-	merged, err := profile.Merge(baseCfg, profileCfg)
-	if err != nil {
+	var merged *profile.FacetConfig
+	if err := a.reporter.ProgressStep("Merging base and profile", func() error {
+		var stepErr error
+		merged, stepErr = profile.Merge(baseCfg, profileCfg)
+		return stepErr
+	}); err != nil {
 		return fmt.Errorf("merge error: %w", err)
 	}
-	merged, err = profile.Merge(merged, localCfg)
-	if err != nil {
+	if err := a.reporter.ProgressStep("Merging local config", func() error {
+		var stepErr error
+		merged, stepErr = profile.Merge(merged, localCfg)
+		return stepErr
+	}); err != nil {
 		return fmt.Errorf("merge error with .local.yaml: %w", err)
 	}
-	if err := profile.ValidateMergedConfig(merged); err != nil {
+	if err := a.reporter.ProgressStep("Validating merged config", func() error {
+		return profile.ValidateMergedConfig(merged)
+	}); err != nil {
 		return err
 	}
 
 	// Step 5: Resolve variables
-	resolved, err := profile.Resolve(merged)
-	if err != nil {
+	var resolved *profile.FacetConfig
+	if err := a.reporter.ProgressStep("Resolving variables", func() error {
+		var stepErr error
+		resolved, stepErr = profile.Resolve(merged)
+		return stepErr
+	}); err != nil {
 		return err
 	}
 
@@ -145,17 +181,26 @@ func (a *App) Apply(profileName string, opts ApplyOpts) error {
 	}
 
 	// Step 7: Canary write to .state.json
-	if err := os.MkdirAll(opts.StateDir, 0o755); err != nil {
+	if err := a.reporter.ProgressStep("Creating state directory", func() error {
+		return os.MkdirAll(opts.StateDir, 0o755)
+	}); err != nil {
 		return fmt.Errorf("cannot create state directory %s: %w", opts.StateDir, err)
 	}
-	if err := a.stateStore.CanaryWrite(opts.StateDir); err != nil {
+	if err := a.reporter.ProgressStep("Writing state canary", func() error {
+		return a.stateStore.CanaryWrite(opts.StateDir)
+	}); err != nil {
 		return fmt.Errorf("cannot write state file: %w", err)
 	}
 
 	// Read previous state for unapply
-	prevState, err := a.stateStore.Read(opts.StateDir)
-	if err != nil {
-		a.reporter.Warning(fmt.Sprintf("Could not read previous state: %v", err))
+	var prevState *ApplyState
+	readErr := a.reporter.ProgressStep("Reading previous state", func() error {
+		var stepErr error
+		prevState, stepErr = a.stateStore.Read(opts.StateDir)
+		return stepErr
+	})
+	if readErr != nil {
+		a.reporter.Warning(fmt.Sprintf("Could not read previous state: %v", readErr))
 	}
 
 	var prevConfigs []deploy.ConfigResult
@@ -233,7 +278,7 @@ func (a *App) Apply(profileName string, opts ApplyOpts) error {
 	deployer := a.deployerFactory(opts.ConfigDir, "", resolved.Vars, prevConfigs)
 
 	if stages["configs"] && len(resolved.Configs) > 0 {
-		a.reporter.Progress("Deploying configs")
+		done := a.reporter.ProgressStart("Deploying configs")
 		var deployErr error
 
 		targets := make([]string, 0, len(resolved.Configs))
@@ -243,30 +288,46 @@ func (a *App) Apply(profileName string, opts ApplyOpts) error {
 		sort.Strings(targets)
 
 		for _, target := range targets {
-			a.reporter.Progress(fmt.Sprintf("  → %s", target))
 			source := resolved.Configs[target]
 
-			sourceSpec, err := deploy.ResolveSourcePath(source, resolved.ConfigMeta[target], opts.ConfigDir)
+			var sourceSpec deploy.SourceSpec
+			err := a.reporter.ProgressStep("  -> "+target+" source", func() error {
+				var stepErr error
+				sourceSpec, stepErr = deploy.ResolveSourcePath(source, resolved.ConfigMeta[target], opts.ConfigDir)
+				return stepErr
+			})
 			if err != nil {
 				if opts.SkipFailure {
 					a.reporter.Warning(fmt.Sprintf("Skipping config %s: %v", target, err))
 					continue
 				}
 				deployer.Rollback()
-				return fmt.Errorf("config deployment failed: %w", err)
+				finalErr := fmt.Errorf("config deployment failed: %w", err)
+				done("failed", finalErr)
+				return finalErr
 			}
 
-			expandedTarget, err := deploy.ExpandPath(target)
+			var expandedTarget string
+			err = a.reporter.ProgressStep("  -> "+target+" expand", func() error {
+				var stepErr error
+				expandedTarget, stepErr = deploy.ExpandPath(target)
+				return stepErr
+			})
 			if err != nil {
 				if opts.SkipFailure {
 					a.reporter.Warning(fmt.Sprintf("Skipping config %s: %v", target, err))
 					continue
 				}
 				deployer.Rollback()
-				return fmt.Errorf("config deployment failed: %w", err)
+				finalErr := fmt.Errorf("config deployment failed: %w", err)
+				done("failed", finalErr)
+				return finalErr
 			}
 
-			_, err = deployer.DeployOne(expandedTarget, sourceSpec, opts.Force)
+			err = a.reporter.ProgressStep("  -> "+target, func() error {
+				_, stepErr := deployer.DeployOne(expandedTarget, sourceSpec, opts.Force)
+				return stepErr
+			})
 			if err != nil {
 				if opts.SkipFailure {
 					a.reporter.Warning(fmt.Sprintf("Config deploy warning: %v", err))
@@ -284,17 +345,22 @@ func (a *App) Apply(profileName string, opts ApplyOpts) error {
 			if prevState == nil {
 				os.Remove(filepath.Join(opts.StateDir, stateFile))
 			}
-			return fmt.Errorf("config deployment failed (rolled back): %w", deployErr)
+			finalErr := fmt.Errorf("config deployment failed (rolled back): %w", deployErr)
+			done("failed", finalErr)
+			return finalErr
 		}
+		done("done", nil)
 	}
 
 	// Stage: pre_apply
 	if stages["pre_apply"] {
 		if len(resolved.PreApply) > 0 {
-			a.reporter.Progress("Running pre_apply scripts")
-		}
-		if err := a.runScripts(resolved.PreApply, opts.ConfigDir, "pre_apply"); err != nil {
-			return err
+			done := a.reporter.ProgressStart("Running pre_apply scripts")
+			if err := a.runScripts(resolved.PreApply, opts.ConfigDir, "pre_apply"); err != nil {
+				done("failed", err)
+				return err
+			}
+			done("done", nil)
 		}
 	}
 
@@ -302,21 +368,26 @@ func (a *App) Apply(profileName string, opts ApplyOpts) error {
 	var pkgResults []packages.PackageResult
 	if stages["packages"] {
 		if len(resolved.Packages) > 0 {
-			a.reporter.Progress("Installing packages")
+			done := a.reporter.ProgressStart("Installing packages")
 			for _, pkg := range resolved.Packages {
-				a.reporter.Progress(fmt.Sprintf("  → %s", pkg.Name))
+				a.reporter.Progress("  -> " + pkg.Name)
 			}
+			pkgResults = a.installer.InstallAll(resolved.Packages)
+			done("done", nil)
+		} else {
+			pkgResults = a.installer.InstallAll(resolved.Packages)
 		}
-		pkgResults = a.installer.InstallAll(resolved.Packages)
 	}
 
 	// Stage: post_apply
 	if stages["post_apply"] {
 		if len(resolved.PostApply) > 0 {
-			a.reporter.Progress("Running post_apply scripts")
-		}
-		if err := a.runScripts(resolved.PostApply, opts.ConfigDir, "post_apply"); err != nil {
-			return err
+			done := a.reporter.ProgressStart("Running post_apply scripts")
+			if err := a.runScripts(resolved.PostApply, opts.ConfigDir, "post_apply"); err != nil {
+				done("failed", err)
+				return err
+			}
+			done("done", nil)
 		}
 	}
 
@@ -324,11 +395,14 @@ func (a *App) Apply(profileName string, opts ApplyOpts) error {
 	var aiState *ai.AIState
 	effectiveAI := ai.Resolve(resolved.AI)
 	if stages["ai"] && a.aiOrchestrator != nil && (effectiveAI != nil || prevAIState != nil) {
-		a.reporter.Progress("Applying AI configuration")
+		done := a.reporter.ProgressStart("Applying AI configuration")
 		var aiErr error
 		aiState, aiErr = a.aiOrchestrator.Apply(effectiveAI, prevAIState)
 		if aiErr != nil {
 			a.reporter.Error(fmt.Sprintf("AI configuration failed: %v", aiErr))
+			done("failed", aiErr)
+		} else {
+			done("done", nil)
 		}
 		if isEmptyAIState(aiState) {
 			aiState = nil
@@ -365,12 +439,19 @@ func (a *App) Apply(profileName string, opts ApplyOpts) error {
 		AI:           aiState,
 	}
 
-	if err := a.stateStore.Write(opts.StateDir, applyState); err != nil {
+	if err := a.reporter.ProgressStep("Writing state", func() error {
+		return a.stateStore.Write(opts.StateDir, applyState)
+	}); err != nil {
 		return fmt.Errorf("failed to write state: %w", err)
 	}
 
 	// Step 12: Report
-	a.printApplyReport(applyState)
+	if err := a.reporter.ProgressStep("Rendering apply report", func() error {
+		a.printApplyReport(applyState)
+		return nil
+	}); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -385,12 +466,13 @@ func (a *App) runScripts(scripts []profile.ScriptEntry, fallbackDir, stageName s
 	}
 
 	for _, script := range scripts {
-		a.reporter.Progress(fmt.Sprintf("  → %s", script.Name))
 		dir := script.WorkDir
 		if dir == "" {
 			dir = fallbackDir
 		}
-		if err := a.scriptRunner.Run(script.Run, dir); err != nil {
+		if err := a.reporter.ProgressStep("  -> "+script.Name, func() error {
+			return a.scriptRunner.Run(script.Run, dir)
+		}); err != nil {
 			return fmt.Errorf("%s script %q failed: %w", stageName, script.Name, err)
 		}
 	}
