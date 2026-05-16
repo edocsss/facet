@@ -18,9 +18,21 @@ echo "$output" | grep -Eq "Writing state \.\.\. ok [0-9]+ms|Writing state \.\.\.
 echo "$output" | grep -Eq "facet apply work \.\.\. done [0-9]+ms|facet apply work \.\.\. done [0-9]+\.[0-9]s" || { echo "  FAIL: missing total apply done timing"; exit 1; }
 echo "  --verbose shows timed stage progress lines"
 
-echo "$output" | grep -Eq -- "-> ripgrep (check|install|skip) \.\.\. (ok|failed|skipped)" || { echo "  FAIL: missing package item timing for 'ripgrep'"; exit 1; }
+echo "$output" | grep -Eq -- "-> ripgrep (check|install|skip) \.\.\. (ok|failed|skipped) ([0-9]+ms|[0-9]+\.[0-9]s)" || { echo "  FAIL: missing package item timing for 'ripgrep'"; exit 1; }
 echo "$output" | grep -Eq -- "-> create-pre-marker \.\.\. ok" || { echo "  FAIL: missing pre_apply item timing for 'create-pre-marker'"; exit 1; }
 echo "  --verbose shows timed item-level detail"
+
+cat > "$HOME/dotfiles/profiles/failure-timing.yaml" << 'YAML'
+extends: base
+
+packages:
+  - name: guaranteed-fail
+    install: "false"
+YAML
+
+output_failed=$(facet -c "$HOME/dotfiles" -s "$HOME/.facet" apply --verbose failure-timing 2>&1)
+echo "$output_failed" | grep -Eq -- "-> guaranteed-fail install \.\.\. failed ([0-9]+ms|[0-9]+\.[0-9]s)" || { echo "  FAIL: missing failed package timing"; exit 1; }
+echo "  --verbose shows failed package timing"
 
 output_short=$(facet -c "$HOME/dotfiles" -s "$HOME/.facet" apply -v work 2>&1)
 echo "$output_short" | grep -q "Loading profile" || { echo "  FAIL: -v short form missing 'Loading profile'"; exit 1; }
@@ -42,6 +54,29 @@ if echo "$output_quiet" | grep -q "\.\.\. ok [0-9]"; then
 fi
 echo "  without --verbose, no stage progress lines shown"
 
+bash "$FIXTURE_DIR/setup-ai.sh"
+mkdir -p "$HOME/.agents"
+cat > "$HOME/.agents/.skill-lock.json" << 'JSON'
+{
+  "version": 3,
+  "skills": {
+    "frontend-design": {"source": "@vercel-labs/agent-skills", "sourceUrl": "https://github.com/vercel-labs/agent-skills.git"}
+  }
+}
+JSON
+
+output_ai=$(facet -c "$HOME/dotfiles" -s "$HOME/.facet" apply --verbose work 2>&1)
+echo "$output_ai" | grep -Eq "AI permissions \.\.\. start" || { echo "  FAIL: missing AI permissions timing"; exit 1; }
+echo "$output_ai" | grep -Eq -- "-> skills install @vercel-labs/agent-skills \\[claude-code,cursor\\] \.\.\. ok" || { echo "  FAIL: missing AI skills timing"; exit 1; }
+echo "$output_ai" | grep -Eq -- "-> mcp register github claude-code \.\.\. ok" || { echo "  FAIL: missing AI MCP timing"; exit 1; }
+if echo "$output_ai" | grep -q "s3cret"; then
+	echo "  FAIL: verbose timing leaked resolved secret"
+	exit 1
+fi
+echo "  --verbose shows AI timings without secret values"
+
 output_force=$(facet -c "$HOME/dotfiles" -s "$HOME/.facet" apply --verbose --force work 2>&1)
-echo "$output_force" | grep -q "Unapplying previous state" || { echo "  FAIL: missing 'Unapplying previous state' in verbose --force output"; exit 1; }
-echo "  --verbose --force shows unapply progress"
+echo "$output_force" | grep -Eq "Unapplying previous state \.\.\. start" || { echo "  FAIL: missing timed unapply start in verbose --force output"; exit 1; }
+echo "$output_force" | grep -Eq -- "-> configs unapply \.\.\. ok" || { echo "  FAIL: missing timed config unapply in verbose --force output"; exit 1; }
+echo "$output_force" | grep -Eq "Unapplying previous state \.\.\. done" || { echo "  FAIL: missing timed unapply completion in verbose --force output"; exit 1; }
+echo "  --verbose --force shows timed unapply progress"

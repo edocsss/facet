@@ -735,6 +735,7 @@ func TestOrchestrator_EmitsTimingForAIItems(t *testing.T) {
 			MCPs: []ResolvedMCP{{
 				Name:    "filesystem",
 				Command: "true",
+				Env:     map[string]string{"TOKEN": "super-secret-token"},
 			}},
 		},
 	}
@@ -750,6 +751,45 @@ func TestOrchestrator_EmitsTimingForAIItems(t *testing.T) {
 	assert.Contains(t, out, "progress:   -> skills verify owner/repo ... ok")
 	assert.Contains(t, out, "progress: AI MCPs ... start")
 	assert.Contains(t, out, "progress:   -> mcp register filesystem claude-code ... ok")
+	assert.NotContains(t, out, "super-secret-token")
+}
+
+func TestOrchestrator_EmitsFailedTimingForAIItems(t *testing.T) {
+	provider := &mockProvider{
+		applyPermErr:   errors.New("permission write failed"),
+		registerMCPErr: errors.New("mcp write failed"),
+	}
+	skillsMgr := &mockSkillsMgr{
+		installErr: errors.New("skill install failed"),
+	}
+	reporter := &mockReporter{}
+	orch := NewOrchestrator(
+		map[string]AgentProvider{"claude-code": provider},
+		skillsMgr,
+		reporter,
+	)
+
+	config := EffectiveAIConfig{
+		"claude-code": {
+			Permissions: ResolvedPermissions{Allow: []string{"Read"}},
+			Skills: []ResolvedSkill{{
+				Source: "owner/repo",
+				Name:   "code-review",
+			}},
+			MCPs: []ResolvedMCP{{
+				Name:    "filesystem",
+				Command: "true",
+			}},
+		},
+	}
+
+	_, err := orch.Apply(config, nil)
+	require.NoError(t, err)
+
+	out := strings.Join(reporter.messages, "\n")
+	assert.Contains(t, out, "progress:   -> permissions claude-code ... failed")
+	assert.Contains(t, out, "progress:   -> skills install owner/repo [claude-code] ... failed")
+	assert.Contains(t, out, "progress:   -> mcp register filesystem claude-code ... failed")
 }
 
 func TestOrchestrator_Apply_SkillInstallPartialFailure(t *testing.T) {

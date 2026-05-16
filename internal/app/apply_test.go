@@ -52,6 +52,7 @@ type mockDeployer struct {
 	deployed []deploy.ConfigResult
 	sources  []deploy.SourceSpec
 	unapply  [][]deploy.ConfigResult
+	rollback int
 	err      error
 }
 
@@ -78,7 +79,10 @@ func (m *mockDeployer) Unapply(configs []deploy.ConfigResult) error {
 	m.unapply = append(m.unapply, configs)
 	return nil
 }
-func (m *mockDeployer) Rollback() error                 { return nil }
+func (m *mockDeployer) Rollback() error {
+	m.rollback++
+	return nil
+}
 func (m *mockDeployer) Deployed() []deploy.ConfigResult { return m.deployed }
 
 type mockBaseResolver struct {
@@ -970,6 +974,48 @@ func TestApply_SameProfileSkipFailure_PreservesPreviousConfigState(t *testing.T)
 	assert.Equal(t, prevConfigs, stateStore.written.Configs)
 }
 
+func TestApply_EmitsRollbackTiming_OnConfigFailure(t *testing.T) {
+	cfgDir := t.TempDir()
+	stateDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, ".local.yaml"), []byte(""), 0o644))
+
+	target := filepath.Join(stateDir, ".gitconfig")
+	r := &mockReporter{}
+	mockDep := &mockDeployer{err: fmt.Errorf("deploy failed")}
+	baseCfg := &profile.FacetConfig{
+		Configs: map[string]string{
+			target: "configs/.gitconfig",
+		},
+	}
+	loader := &mockLoader{
+		meta: &profile.FacetMeta{},
+		configs: map[string]*profile.FacetConfig{
+			filepath.Join(cfgDir, "profiles", "work.yaml"): {Extends: "file:///tmp/base.git"},
+			filepath.Join(stateDir, ".local.yaml"):         {},
+		},
+	}
+
+	a := New(Deps{
+		Reporter:     r,
+		Loader:       loader,
+		BaseResolver: newStaticBaseResolver(baseCfg),
+		Installer:    &mockInstaller{},
+		StateStore:   &mockStateStore{},
+		DeployerFactory: func(configDir, homeDir string, vars map[string]any, ownedConfigs []deploy.ConfigResult) deploy.Service {
+			return mockDep
+		},
+		OSName: "macos",
+	})
+
+	err := a.Apply("work", ApplyOpts{ConfigDir: cfgDir, StateDir: stateDir})
+	require.Error(t, err)
+
+	progressOutput := strings.Join(r.messages, "\n")
+	assert.Contains(t, progressOutput, "progress:   -> "+target+" ... failed")
+	assert.Contains(t, progressOutput, "progress: Rolling back deployed configs ... ok")
+	assert.Equal(t, 1, mockDep.rollback)
+}
+
 func TestApply_InvalidStageReturnsError(t *testing.T) {
 	a := New(Deps{
 		Reporter: &mockReporter{},
@@ -1338,7 +1384,7 @@ func TestApply_EmitsProgressMessages(t *testing.T) {
 	assert.Contains(t, progressOutput, "progress: Deploying configs ... start")
 	assert.Contains(t, progressOutput, "progress:   -> "+targetPath+" ... ok")
 	assert.Contains(t, progressOutput, "progress: Installing packages ... start")
-	assert.Contains(t, progressOutput, "progress:   -> git")
+	assert.NotContains(t, progressMessages, "progress:   -> git")
 	assert.Contains(t, progressOutput, "progress: Running pre_apply scripts ... start")
 	assert.Contains(t, progressOutput, "progress:   -> setup ... ok")
 	assert.Contains(t, progressOutput, "progress: Running post_apply scripts ... start")
@@ -1406,8 +1452,10 @@ func TestApply_EmitsUnapplyProgress_OnForce(t *testing.T) {
 		}
 	}
 
-	assert.Contains(t, progressMessages, "progress: Unapplying previous state")
-	assert.Contains(t, progressMessages, "progress:   → remove "+prevTarget)
+	progressOutput := strings.Join(progressMessages, "\n")
+	assert.Contains(t, progressOutput, "progress: Unapplying previous state ... start")
+	assert.Contains(t, progressOutput, "progress:   -> configs unapply ... ok")
+	assert.Contains(t, progressOutput, "progress: Unapplying previous state ... done")
 }
 
 func TestApply_ForceWithNonUnapplyStages_SkipsUnapplyProgress(t *testing.T) {
@@ -1508,8 +1556,10 @@ func TestApply_EmitsOrphanCleanupProgress(t *testing.T) {
 		StateDir:  stateDir,
 	})
 	require.NoError(t, err)
-	assert.Contains(t, r.messages, "progress: Cleaning up orphaned configs")
-	assert.Contains(t, r.messages, "progress:   → remove "+orphanTarget)
+	progressOutput := strings.Join(r.messages, "\n")
+	assert.Contains(t, progressOutput, "progress: Cleaning up orphaned configs ... start")
+	assert.Contains(t, progressOutput, "progress:   -> orphan configs unapply ... ok")
+	assert.Contains(t, progressOutput, "progress: Cleaning up orphaned configs ... done")
 	require.Len(t, mockDep.unapply, 1)
 	assert.Equal(t, orphanTarget, mockDep.unapply[0][0].Target)
 }

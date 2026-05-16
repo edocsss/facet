@@ -283,6 +283,24 @@ func TestInstallAll_ReportsPackageSkipTiming(t *testing.T) {
 	assert.Equal(t, []timingCall{{label: "  -> mac-only skip", outcome: "skipped"}}, timing.calls)
 }
 
+func TestInstallAll_ReportsInstallFailureTiming(t *testing.T) {
+	runner := newMockRunner()
+	runner.failOn["false"] = errors.New("exit status 1")
+	timing := &packageTimingReporter{}
+	inst := NewInstallerWithProgress(runner, "linux", timing)
+
+	pkgs := []profile.PackageEntry{{
+		Name:    "guaranteed-fail",
+		Install: profile.InstallCmd{Command: "false"},
+	}}
+
+	results := inst.InstallAll(pkgs)
+
+	require.Len(t, results, 1)
+	assert.Equal(t, StatusFailed, results[0].Status)
+	assert.Equal(t, []timingCall{{label: "  -> guaranteed-fail install", outcome: "failed"}}, timing.calls)
+}
+
 func TestInstallAll_NoCheckRunsInstall(t *testing.T) {
 	runner := newMockRunner()
 	inst := NewInstaller(runner, "macos")

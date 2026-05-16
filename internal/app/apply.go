@@ -219,24 +219,27 @@ func (a *App) Apply(profileName string, opts ApplyOpts) (applyErr error) {
 			willUnapplyConfigs := stages["configs"] && len(prevState.Configs) > 0
 			willUnapplyAI := stages["ai"] && a.aiOrchestrator != nil && prevState.AI != nil
 			if willUnapplyConfigs || willUnapplyAI {
-				a.reporter.Progress("Unapplying previous state")
-			}
-			if willUnapplyConfigs {
-				for _, cfg := range prevState.Configs {
-					a.reporter.Progress(fmt.Sprintf("  → remove %s", cfg.Target))
+				done := a.reporter.ProgressStart("Unapplying previous state")
+				if willUnapplyAI {
+					if err := a.reporter.ProgressStep("  -> AI unapply", func() error {
+						return a.aiOrchestrator.Unapply(prevState.AI)
+					}); err != nil {
+						a.reporter.Error(fmt.Sprintf("AI unapply failed: %v", err))
+					}
+					prevAIState = nil
 				}
-			}
-			if willUnapplyAI {
-				if err := a.aiOrchestrator.Unapply(prevState.AI); err != nil {
-					a.reporter.Error(fmt.Sprintf("AI unapply failed: %v", err))
+				if stages["configs"] {
+					unapplyDeployer := a.deployerFactory(opts.ConfigDir, "", resolved.Vars, nil)
+					if err := a.reporter.ProgressStep("  -> configs unapply", func() error {
+						return unapplyDeployer.Unapply(prevState.Configs)
+					}); err != nil {
+						a.reporter.Warning(fmt.Sprintf("Unapply warning: %v", err))
+					}
+					prevConfigs = nil
 				}
-				prevAIState = nil
+				done("done", nil)
 			}
-			if stages["configs"] {
-				unapplyDeployer := a.deployerFactory(opts.ConfigDir, "", resolved.Vars, nil)
-				if err := unapplyDeployer.Unapply(prevState.Configs); err != nil {
-					a.reporter.Warning(fmt.Sprintf("Unapply warning: %v", err))
-				}
+			if !willUnapplyConfigs && stages["configs"] {
 				prevConfigs = nil
 			}
 		} else if stages["configs"] {
@@ -261,14 +264,14 @@ func (a *App) Apply(profileName string, opts ApplyOpts) (applyErr error) {
 					}
 				}
 				if len(orphans) > 0 {
-					a.reporter.Progress("Cleaning up orphaned configs")
-					for _, cfg := range orphans {
-						a.reporter.Progress(fmt.Sprintf("  → remove %s", cfg.Target))
-					}
+					done := a.reporter.ProgressStart("Cleaning up orphaned configs")
 					orphanDeployer := a.deployerFactory(opts.ConfigDir, "", nil, nil)
-					if err := orphanDeployer.Unapply(orphans); err != nil {
+					if err := a.reporter.ProgressStep("  -> orphan configs unapply", func() error {
+						return orphanDeployer.Unapply(orphans)
+					}); err != nil {
 						a.reporter.Warning(fmt.Sprintf("Orphan cleanup warning: %v", err))
 					}
+					done("done", nil)
 				}
 			}
 		}
@@ -301,7 +304,7 @@ func (a *App) Apply(profileName string, opts ApplyOpts) (applyErr error) {
 					a.reporter.Warning(fmt.Sprintf("Skipping config %s: %v", target, err))
 					continue
 				}
-				deployer.Rollback()
+				a.rollbackDeployedConfigs(deployer)
 				finalErr := fmt.Errorf("config deployment failed: %w", err)
 				done("failed", finalErr)
 				return finalErr
@@ -318,7 +321,7 @@ func (a *App) Apply(profileName string, opts ApplyOpts) (applyErr error) {
 					a.reporter.Warning(fmt.Sprintf("Skipping config %s: %v", target, err))
 					continue
 				}
-				deployer.Rollback()
+				a.rollbackDeployedConfigs(deployer)
 				finalErr := fmt.Errorf("config deployment failed: %w", err)
 				done("failed", finalErr)
 				return finalErr
@@ -341,7 +344,7 @@ func (a *App) Apply(profileName string, opts ApplyOpts) (applyErr error) {
 		if deployErr != nil {
 			a.reporter.Error(fmt.Sprintf("Config deployment failed: %v", deployErr))
 			a.reporter.Warning("Rolling back deployed configs...")
-			deployer.Rollback()
+			a.rollbackDeployedConfigs(deployer)
 			if prevState == nil {
 				os.Remove(filepath.Join(opts.StateDir, stateFile))
 			}
@@ -369,9 +372,6 @@ func (a *App) Apply(profileName string, opts ApplyOpts) (applyErr error) {
 	if stages["packages"] {
 		if len(resolved.Packages) > 0 {
 			done := a.reporter.ProgressStart("Installing packages")
-			for _, pkg := range resolved.Packages {
-				a.reporter.Progress("  -> " + pkg.Name)
-			}
 			pkgResults = a.installer.InstallAll(resolved.Packages)
 			done("done", nil)
 		} else {
@@ -454,6 +454,12 @@ func (a *App) Apply(profileName string, opts ApplyOpts) (applyErr error) {
 	}
 
 	return nil
+}
+
+func (a *App) rollbackDeployedConfigs(deployer deploy.Service) {
+	_ = a.reporter.ProgressStep("Rolling back deployed configs", func() error {
+		return deployer.Rollback()
+	})
 }
 
 // runScripts executes a list of scripts sequentially. Fails fast on first error.
