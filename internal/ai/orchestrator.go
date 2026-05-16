@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Reporter is the interface that the Orchestrator uses for user-facing output.
@@ -16,6 +17,9 @@ type Reporter interface {
 	Header(msg string)
 	PrintLine(msg string)
 	Dim(text string) string
+	ProgressDuration(label, outcome string, elapsed time.Duration, err error)
+	ProgressStart(label string) func(outcome string, err error)
+	ProgressStep(label string, fn func() error) error
 }
 
 // Orchestrator coordinates AI configuration across all agent providers.
@@ -117,6 +121,9 @@ func (o *Orchestrator) Unapply(previousState *AIState) error {
 // applyPermissions removes permissions for dropped agents, then applies
 // native permissions directly for each current agent.
 func (o *Orchestrator) applyPermissions(config EffectiveAIConfig, previousState *AIState, state *AIState) {
+	done := o.reporter.ProgressStart("AI permissions")
+	defer done("done", nil)
+
 	if previousState != nil {
 		for agent, ps := range previousState.Permissions {
 			if _, exists := config[agent]; exists {
@@ -130,7 +137,9 @@ func (o *Orchestrator) applyPermissions(config EffectiveAIConfig, previousState 
 			}
 
 			perms := ResolvedPermissions{Allow: ps.Allow, Deny: ps.Deny}
-			if err := provider.RemovePermissions(perms); err != nil {
+			if err := o.reporter.ProgressStep("  -> permissions remove "+agent, func() error {
+				return provider.RemovePermissions(perms)
+			}); err != nil {
 				o.reporter.Warning(fmt.Sprintf("failed to remove permissions for dropped agent %q: %v", agent, err))
 			} else {
 				o.reporter.Success(fmt.Sprintf("removed permissions for %s", agent))
@@ -151,7 +160,9 @@ func (o *Orchestrator) applyPermissions(config EffectiveAIConfig, previousState 
 		}
 
 		perms := agentCfg.Permissions
-		if err := provider.ApplyPermissions(perms); err != nil {
+		if err := o.reporter.ProgressStep("  -> permissions "+agent, func() error {
+			return provider.ApplyPermissions(perms)
+		}); err != nil {
 			o.reporter.Error(fmt.Sprintf("failed to apply permissions for %q: %v", agent, err))
 			continue
 		}
@@ -179,6 +190,9 @@ type skillID struct {
 
 // applySkills installs current skills and removes orphans from previousState.
 func (o *Orchestrator) applySkills(config EffectiveAIConfig, previousState *AIState, state *AIState) {
+	done := o.reporter.ProgressStart("AI skills")
+	defer done("done", nil)
+
 	currentSkills := make(map[skillID]map[string]struct{})
 	// Track which sources have an "all" entry per agent.
 	currentAllSources := make(map[string]map[string]struct{}) // source → set of agents
@@ -204,7 +218,12 @@ func (o *Orchestrator) applySkills(config EffectiveAIConfig, previousState *AISt
 		for _, prevSkill := range previousState.Skills {
 			for _, agent := range prevSkill.Agents {
 				if prevSkill.Name == "" {
-					skillsToRemove, err := o.sourceSkillsToRemove(prevSkill.Source, agent, currentSkills, currentAllSources)
+					var skillsToRemove []string
+					err := o.reporter.ProgressStep("  -> skills detect orphans "+prevSkill.Source+" "+agent, func() error {
+						var stepErr error
+						skillsToRemove, stepErr = o.sourceSkillsToRemove(prevSkill.Source, agent, currentSkills, currentAllSources)
+						return stepErr
+					})
 					if err != nil {
 						o.reporter.Warning(fmt.Sprintf("failed to resolve orphan skills from %q for %q: %v", prevSkill.Source, agent, err))
 						continue
@@ -212,7 +231,9 @@ func (o *Orchestrator) applySkills(config EffectiveAIConfig, previousState *AISt
 					if len(skillsToRemove) == 0 {
 						continue
 					}
-					if err := o.skillsManager.Remove(skillsToRemove, []string{agent}); err != nil {
+					if err := o.reporter.ProgressStep("  -> skills remove "+prevSkill.Source+" "+agent, func() error {
+						return o.skillsManager.Remove(skillsToRemove, []string{agent})
+					}); err != nil {
 						o.reporter.Warning(fmt.Sprintf("failed to remove orphan skills from %q for %q: %v", prevSkill.Source, agent, err))
 					} else {
 						o.reporter.Success(fmt.Sprintf("removed orphan skills %v from %s", skillsToRemove, agent))
@@ -230,7 +251,9 @@ func (o *Orchestrator) applySkills(config EffectiveAIConfig, previousState *AISt
 						continue
 					}
 				}
-				if err := o.skillsManager.Remove([]string{prevSkill.Name}, []string{agent}); err != nil {
+				if err := o.reporter.ProgressStep("  -> skills remove "+prevSkill.Name+" "+agent, func() error {
+					return o.skillsManager.Remove([]string{prevSkill.Name}, []string{agent})
+				}); err != nil {
 					o.reporter.Warning(fmt.Sprintf("failed to remove orphan skill %q from %q: %v", prevSkill.Name, agent, err))
 				} else {
 					o.reporter.Success(fmt.Sprintf("removed orphan skill %q from %s", prevSkill.Name, agent))
@@ -280,7 +303,10 @@ func (o *Orchestrator) applySkills(config EffectiveAIConfig, previousState *AISt
 			installSkills = skills
 		}
 
-		if err := o.skillsManager.Install(gk.source, installSkills, agents); err != nil {
+		label := fmt.Sprintf("  -> skills install %s [%s]", gk.source, strings.Join(agents, ","))
+		if err := o.reporter.ProgressStep(label, func() error {
+			return o.skillsManager.Install(gk.source, installSkills, agents)
+		}); err != nil {
 			o.reporter.Warning(fmt.Sprintf("failed to install skills from %q: %v", gk.source, err))
 			continue
 		}
@@ -288,9 +314,14 @@ func (o *Orchestrator) applySkills(config EffectiveAIConfig, previousState *AISt
 		recordedSkills := skills
 		verifiedViaLock := true
 		if allGroups[gk] {
-			resolvedSkills, err := o.skillsManager.InstalledForSource(gk.source)
-			if err != nil {
-				o.reporter.Warning(fmt.Sprintf("installed all skills from %q, but failed to resolve concrete skill names: %v", gk.source, err))
+			var resolvedSkills []string
+			verifyErr := o.reporter.ProgressStep("  -> skills verify "+gk.source, func() error {
+				var stepErr error
+				resolvedSkills, stepErr = o.skillsManager.InstalledForSource(gk.source)
+				return stepErr
+			})
+			if verifyErr != nil {
+				o.reporter.Warning(fmt.Sprintf("installed all skills from %q, but failed to resolve concrete skill names: %v", gk.source, verifyErr))
 				recordedSkills = nil
 			} else if len(resolvedSkills) == 0 {
 				o.reporter.Warning(fmt.Sprintf("installed all skills from %q, but could not resolve concrete skill names from the skill lock; future cleanup will be skipped until the source is re-applied with a readable lock", gk.source))
@@ -299,9 +330,14 @@ func (o *Orchestrator) applySkills(config EffectiveAIConfig, previousState *AISt
 				recordedSkills = resolvedSkills
 			}
 		} else {
-			verified, err := o.skillsManager.InstalledForSource(gk.source)
-			if err != nil {
-				o.reporter.Warning(fmt.Sprintf("installed skills from %q but could not verify via skill lock: %v - recording requested names", gk.source, err))
+			var verified []string
+			verifyErr := o.reporter.ProgressStep("  -> skills verify "+gk.source, func() error {
+				var stepErr error
+				verified, stepErr = o.skillsManager.InstalledForSource(gk.source)
+				return stepErr
+			})
+			if verifyErr != nil {
+				o.reporter.Warning(fmt.Sprintf("installed skills from %q but could not verify via skill lock: %v - recording requested names", gk.source, verifyErr))
 				verifiedViaLock = false
 			} else {
 				verifiedSet := make(map[string]struct{}, len(verified))
@@ -389,6 +425,9 @@ func (o *Orchestrator) sourceSkillsToRemove(
 
 // applyMCPs registers current MCPs and removes orphans from previousState.
 func (o *Orchestrator) applyMCPs(config EffectiveAIConfig, previousState *AIState, state *AIState) {
+	done := o.reporter.ProgressStart("AI MCPs")
+	defer done("done", nil)
+
 	currentMCPs := make(map[string]map[string]struct{})
 	mcpConfigs := make(map[string]ResolvedMCP)
 
@@ -415,7 +454,9 @@ func (o *Orchestrator) applyMCPs(config EffectiveAIConfig, previousState *AIStat
 					o.reporter.Warning(fmt.Sprintf("no provider for agent %q, skipping orphan MCP removal for %q", agent, prevMCP.Name))
 					continue
 				}
-				if err := provider.RemoveMCP(prevMCP.Name); err != nil {
+				if err := o.reporter.ProgressStep("  -> mcp remove "+prevMCP.Name+" "+agent, func() error {
+					return provider.RemoveMCP(prevMCP.Name)
+				}); err != nil {
 					o.reporter.Warning(fmt.Sprintf("failed to remove orphan MCP %q from %q: %v", prevMCP.Name, agent, err))
 				} else {
 					o.reporter.Success(fmt.Sprintf("removed orphan MCP %q from %s", prevMCP.Name, agent))
@@ -444,7 +485,9 @@ func (o *Orchestrator) applyMCPs(config EffectiveAIConfig, previousState *AIStat
 				o.reporter.Warning(fmt.Sprintf("no provider for agent %q, skipping MCP registration for %q", agent, mcpName))
 				continue
 			}
-			if err := provider.RegisterMCP(mcpCfg); err != nil {
+			if err := o.reporter.ProgressStep("  -> mcp register "+mcpName+" "+agent, func() error {
+				return provider.RegisterMCP(mcpCfg)
+			}); err != nil {
 				o.reporter.Warning(fmt.Sprintf("failed to register MCP %q for %q: %v", mcpName, agent, err))
 				continue
 			}
