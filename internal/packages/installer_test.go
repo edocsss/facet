@@ -4,6 +4,7 @@ import (
 	"errors"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,6 +28,29 @@ func (m *mockRunner) Run(command string) error {
 		return err
 	}
 	return nil
+}
+
+type timingCall struct {
+	label   string
+	outcome string
+}
+
+type packageTimingReporter struct {
+	calls []timingCall
+}
+
+func (r *packageTimingReporter) ProgressStep(label string, fn func() error) error {
+	err := fn()
+	outcome := "ok"
+	if err != nil {
+		outcome = "failed"
+	}
+	r.calls = append(r.calls, timingCall{label: label, outcome: outcome})
+	return err
+}
+
+func (r *packageTimingReporter) ProgressDuration(label, outcome string, _ time.Duration, _ error) {
+	r.calls = append(r.calls, timingCall{label: label, outcome: outcome})
 }
 
 func TestDetectOS(t *testing.T) {
@@ -216,6 +240,47 @@ func TestInstallAll_CheckFailsRunsInstall(t *testing.T) {
 	assert.Equal(t, StatusOK, results[0].Status)
 	// Both check and install commands should have been run
 	assert.Equal(t, []string{"which rg", "brew install ripgrep"}, runner.commands)
+}
+
+func TestInstallAll_ReportsCheckAndInstallTiming(t *testing.T) {
+	runner := newMockRunner()
+	runner.failOn["which rg"] = errors.New("exit status 1")
+	timing := &packageTimingReporter{}
+	inst := NewInstallerWithProgress(runner, "macos", timing)
+
+	pkgs := []profile.PackageEntry{{
+		Name:    "ripgrep",
+		Check:   profile.InstallCmd{Command: "which rg"},
+		Install: profile.InstallCmd{Command: "brew install ripgrep"},
+	}}
+
+	results := inst.InstallAll(pkgs)
+
+	require.Len(t, results, 1)
+	assert.Equal(t, StatusOK, results[0].Status)
+	assert.Equal(t, []timingCall{
+		{label: "  -> ripgrep check", outcome: "failed"},
+		{label: "  -> ripgrep install", outcome: "ok"},
+	}, timing.calls)
+}
+
+func TestInstallAll_ReportsPackageSkipTiming(t *testing.T) {
+	runner := newMockRunner()
+	timing := &packageTimingReporter{}
+	inst := NewInstallerWithProgress(runner, "linux", timing)
+
+	pkgs := []profile.PackageEntry{{
+		Name: "mac-only",
+		Install: profile.InstallCmd{PerOS: map[string]string{
+			"macos": "brew install mac-only",
+		}},
+	}}
+
+	results := inst.InstallAll(pkgs)
+
+	require.Len(t, results, 1)
+	assert.Equal(t, StatusSkipped, results[0].Status)
+	assert.Equal(t, []timingCall{{label: "  -> mac-only skip", outcome: "skipped"}}, timing.calls)
 }
 
 func TestInstallAll_NoCheckRunsInstall(t *testing.T) {

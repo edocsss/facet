@@ -34,7 +34,7 @@ func main() {
 	runner := packages.NewShellRunner()
 	scriptRunner := &shellScriptRunner{}
 	osName := packages.DetectOS()
-	installer := packages.NewInstaller(runner, osName)
+	installer := packages.NewInstallerWithProgress(runner, osName, r)
 	stateStore := app.NewFileStateStore()
 	deployerFactory := func(configDir, homeDir string, vars map[string]any, ownedConfigs []deploy.ConfigResult) deploy.Service {
 		return deploy.NewDeployer(configDir, homeDir, vars, ownedConfigs)
