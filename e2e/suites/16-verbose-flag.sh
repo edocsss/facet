@@ -6,18 +6,33 @@ source "$SUITE_DIR/helpers.sh"
 setup_basic
 
 output=$(facet -c "$HOME/dotfiles" -s "$HOME/.facet" apply --verbose work 2>&1)
-echo "$output" | grep -q "Loading profile" || { echo "  FAIL: missing 'Loading profile' in verbose output"; exit 1; }
-echo "$output" | grep -q "Resolving extends" || { echo "  FAIL: missing 'Resolving extends' in verbose output"; exit 1; }
-echo "$output" | grep -q "Merging layers" || { echo "  FAIL: missing 'Merging layers' in verbose output"; exit 1; }
-echo "$output" | grep -q "Deploying configs" || { echo "  FAIL: missing 'Deploying configs' in verbose output"; exit 1; }
-echo "$output" | grep -q "Installing packages" || { echo "  FAIL: missing 'Installing packages' in verbose output"; exit 1; }
-echo "$output" | grep -q "Running pre_apply scripts" || { echo "  FAIL: missing 'Running pre_apply scripts' in verbose output"; exit 1; }
-echo "$output" | grep -q "Running post_apply scripts" || { echo "  FAIL: missing 'Running post_apply scripts' in verbose output"; exit 1; }
-echo "  --verbose shows stage progress lines"
+echo "$output" | grep -Eq "facet apply work \.\.\. start" || { echo "  FAIL: missing total apply start timing"; exit 1; }
+echo "$output" | grep -Eq "Loading profile \.\.\. ok [0-9]+ms|Loading profile \.\.\. ok [0-9]+\.[0-9]s" || { echo "  FAIL: missing timed 'Loading profile'"; exit 1; }
+echo "$output" | grep -Eq "Resolving extends \.\.\. ok [0-9]+ms|Resolving extends \.\.\. ok [0-9]+\.[0-9]s" || { echo "  FAIL: missing timed 'Resolving extends'"; exit 1; }
+echo "$output" | grep -Eq "Merging base and profile \.\.\. ok [0-9]+ms|Merging base and profile \.\.\. ok [0-9]+\.[0-9]s" || { echo "  FAIL: missing timed merge"; exit 1; }
+echo "$output" | grep -Eq "Deploying configs \.\.\. start" || { echo "  FAIL: missing config timing start"; exit 1; }
+echo "$output" | grep -Eq "Installing packages \.\.\. start" || { echo "  FAIL: missing package timing start"; exit 1; }
+echo "$output" | grep -Eq "Running pre_apply scripts \.\.\. start" || { echo "  FAIL: missing pre_apply timing start"; exit 1; }
+echo "$output" | grep -Eq "Running post_apply scripts \.\.\. start" || { echo "  FAIL: missing post_apply timing start"; exit 1; }
+echo "$output" | grep -Eq "Writing state \.\.\. ok [0-9]+ms|Writing state \.\.\. ok [0-9]+\.[0-9]s" || { echo "  FAIL: missing state write timing"; exit 1; }
+echo "$output" | grep -Eq "facet apply work \.\.\. done [0-9]+ms|facet apply work \.\.\. done [0-9]+\.[0-9]s" || { echo "  FAIL: missing total apply done timing"; exit 1; }
+echo "  --verbose shows timed stage progress lines"
 
-echo "$output" | grep -q "→ ripgrep" || { echo "  FAIL: missing package item progress for 'ripgrep'"; exit 1; }
-echo "$output" | grep -q "→ create-pre-marker" || { echo "  FAIL: missing pre_apply item progress for 'create-pre-marker'"; exit 1; }
-echo "  --verbose shows item-level detail"
+echo "$output" | grep -Eq -- "-> ripgrep (check|install|skip) \.\.\. (ok|failed|skipped) ([0-9]+ms|[0-9]+\.[0-9]s)" || { echo "  FAIL: missing package item timing for 'ripgrep'"; exit 1; }
+echo "$output" | grep -Eq -- "-> create-pre-marker \.\.\. ok" || { echo "  FAIL: missing pre_apply item timing for 'create-pre-marker'"; exit 1; }
+echo "  --verbose shows timed item-level detail"
+
+cat > "$HOME/dotfiles/profiles/failure-timing.yaml" << 'YAML'
+extends: base
+
+packages:
+  - name: guaranteed-fail
+    install: "false"
+YAML
+
+output_failed=$(facet -c "$HOME/dotfiles" -s "$HOME/.facet" apply --verbose failure-timing 2>&1)
+echo "$output_failed" | grep -Eq -- "-> guaranteed-fail install \.\.\. failed ([0-9]+ms|[0-9]+\.[0-9]s)" || { echo "  FAIL: missing failed package timing"; exit 1; }
+echo "  --verbose shows failed package timing"
 
 output_short=$(facet -c "$HOME/dotfiles" -s "$HOME/.facet" apply -v work 2>&1)
 echo "$output_short" | grep -q "Loading profile" || { echo "  FAIL: -v short form missing 'Loading profile'"; exit 1; }
@@ -33,8 +48,35 @@ if echo "$output_quiet" | grep -q "Deploying configs"; then
 	echo "  FAIL: 'Deploying configs' appeared without --verbose flag"
 	exit 1
 fi
+if echo "$output_quiet" | grep -q "\.\.\. ok [0-9]"; then
+	echo "  FAIL: timing appeared without --verbose flag"
+	exit 1
+fi
 echo "  without --verbose, no stage progress lines shown"
 
+bash "$FIXTURE_DIR/setup-ai.sh"
+mkdir -p "$HOME/.agents"
+cat > "$HOME/.agents/.skill-lock.json" << 'JSON'
+{
+  "version": 3,
+  "skills": {
+    "frontend-design": {"source": "@vercel-labs/agent-skills", "sourceUrl": "https://github.com/vercel-labs/agent-skills.git"}
+  }
+}
+JSON
+
+output_ai=$(facet -c "$HOME/dotfiles" -s "$HOME/.facet" apply --verbose work 2>&1)
+echo "$output_ai" | grep -Eq "AI permissions \.\.\. start" || { echo "  FAIL: missing AI permissions timing"; exit 1; }
+echo "$output_ai" | grep -Eq -- "-> skills install @vercel-labs/agent-skills \\[claude-code,cursor\\] \.\.\. ok" || { echo "  FAIL: missing AI skills timing"; exit 1; }
+echo "$output_ai" | grep -Eq -- "-> mcp register github claude-code \.\.\. ok" || { echo "  FAIL: missing AI MCP timing"; exit 1; }
+if echo "$output_ai" | grep -q "s3cret"; then
+	echo "  FAIL: verbose timing leaked resolved secret"
+	exit 1
+fi
+echo "  --verbose shows AI timings without secret values"
+
 output_force=$(facet -c "$HOME/dotfiles" -s "$HOME/.facet" apply --verbose --force work 2>&1)
-echo "$output_force" | grep -q "Unapplying previous state" || { echo "  FAIL: missing 'Unapplying previous state' in verbose --force output"; exit 1; }
-echo "  --verbose --force shows unapply progress"
+echo "$output_force" | grep -Eq "Unapplying previous state \.\.\. start" || { echo "  FAIL: missing timed unapply start in verbose --force output"; exit 1; }
+echo "$output_force" | grep -Eq -- "-> configs unapply \.\.\. ok" || { echo "  FAIL: missing timed config unapply in verbose --force output"; exit 1; }
+echo "$output_force" | grep -Eq "Unapplying previous state \.\.\. done" || { echo "  FAIL: missing timed unapply completion in verbose --force output"; exit 1; }
+echo "  --verbose --force shows timed unapply progress"

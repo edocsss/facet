@@ -355,6 +355,8 @@ Profile switching is: **unapply the current profile, then apply the new one.**
 - Deploys all config files (symlink, template, or copy)
 - Writes new `.state.json`
 
+With `--verbose`, each apply step and selected stage item reports an outcome and elapsed duration; non-verbose output remains the final summary only.
+
 ### Same-profile reapply
 
 Running `facet apply <same-profile>` just applies — overwrites configs to converge to the declared state. No unapply needed (the configs are the same targets).
@@ -407,7 +409,7 @@ If a config deployment fails (and `--skip-failure` is not set), facet rolls back
 |---|---|---|---|
 | `--config-dir` | `-c` | Current working directory | Path to the facet config repo |
 | `--state-dir` | `-s` | `~/.facet/` | Path to the machine-local state directory |
-| `--verbose` | `-v` | false | Stream stage and item progress during apply |
+| `--verbose` | `-v` | false | Stream stage, item, and duration diagnostics during apply |
 
 ### facet init
 
@@ -434,7 +436,7 @@ Applies a profile. See Section 8 for the full apply model. The base from `extend
 - `--dry-run` — preview what would happen without making changes
 - `--force` — unapply + apply, skip prompts
 - `--skip-failure` — warn on config deploy failure instead of rollback
-- `--verbose` / `-v` — stream stage and item progress as apply runs
+- `--verbose` / `-v` — stream stage, item, and duration diagnostics as apply runs
 
 **Exit codes:**
 - 0: success

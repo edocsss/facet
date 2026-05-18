@@ -6,7 +6,7 @@
 |------|-------|---------|-------------|
 | `--config-dir` | `-c` | Current directory | Path to the facet config repo |
 | `--state-dir` | `-s` | `~/.facet` | Path to the machine-local state directory |
-| `--verbose` | `-v` | false | Show stage-by-stage progress during apply |
+| `--verbose` | `-v` | false | Stream stage, item, and duration diagnostics during apply |
 
 ## `facet scaffold`
 
@@ -38,7 +38,7 @@ Flags:
 - `--force`: replace conflicting non-facet files and unapply previous state first when needed
 - `--skip-failure`: warn on deploy failures instead of rolling back immediately
 - `--stages`: comma-separated list of stages to run (default: all)
-- `--verbose` / `-v`: stream stage and item progress as apply runs
+- `--verbose` / `-v`: stream stage, item, and duration diagnostics as apply runs
 
 Valid stages (in execution order):
 

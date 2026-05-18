@@ -3,6 +3,7 @@ package packages
 import (
 	"fmt"
 	"runtime"
+	"time"
 
 	"facet/internal/profile"
 )
@@ -21,6 +22,17 @@ type PackageResult struct {
 	Install string `json:"install"`
 	Status  string `json:"status"` // StatusOK, StatusFailed, or StatusSkipped
 	Error   string `json:"error,omitempty"`
+}
+
+type ProgressReporter interface {
+	ProgressStep(label string, fn func() error) error
+	ProgressDuration(label, outcome string, elapsed time.Duration, err error)
+}
+
+type noopProgressReporter struct{}
+
+func (noopProgressReporter) ProgressStep(_ string, fn func() error) error { return fn() }
+func (noopProgressReporter) ProgressDuration(string, string, time.Duration, error) {
 }
 
 // DetectOS returns "macos" or "linux".
@@ -54,13 +66,21 @@ func GetCheckCommand(pkg profile.PackageEntry, osName string) (string, bool) {
 
 // Installer handles package installation using an injected CommandRunner.
 type Installer struct {
-	runner CommandRunner
-	osName string
+	runner   CommandRunner
+	osName   string
+	progress ProgressReporter
 }
 
 // NewInstaller creates an Installer with the given runner and OS name.
 func NewInstaller(runner CommandRunner, osName string) *Installer {
-	return &Installer{runner: runner, osName: osName}
+	return NewInstallerWithProgress(runner, osName, nil)
+}
+
+func NewInstallerWithProgress(runner CommandRunner, osName string, progress ProgressReporter) *Installer {
+	if progress == nil {
+		progress = noopProgressReporter{}
+	}
+	return &Installer{runner: runner, osName: osName, progress: progress}
 }
 
 // InstallAll runs install commands for all packages.
@@ -80,19 +100,27 @@ func (inst *Installer) InstallAll(pkgs []profile.PackageEntry) []PackageResult {
 		if skip {
 			pr.Status = StatusSkipped
 			pr.Error = fmt.Sprintf("no install command for OS %q", inst.osName)
+			inst.progress.ProgressDuration("  -> "+pkg.Name+" skip", "skipped", 0, nil)
 			results = append(results, pr)
 			continue
 		}
 
 		// Run check command if defined — skip install if check succeeds
 		checkCmd, hasCheck := GetCheckCommand(pkg, inst.osName)
-		if hasCheck && inst.runner.Run(checkCmd) == nil {
-			pr.Status = StatusAlreadyInstalled
-			results = append(results, pr)
-			continue
+		if hasCheck {
+			checkErr := inst.progress.ProgressStep("  -> "+pkg.Name+" check", func() error {
+				return inst.runner.Run(checkCmd)
+			})
+			if checkErr == nil {
+				pr.Status = StatusAlreadyInstalled
+				results = append(results, pr)
+				continue
+			}
 		}
 
-		err := inst.runner.Run(cmd)
+		err := inst.progress.ProgressStep("  -> "+pkg.Name+" install", func() error {
+			return inst.runner.Run(cmd)
+		})
 		if err != nil {
 			pr.Status = StatusFailed
 			pr.Error = err.Error()

@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 )
 
 // ANSI color codes
@@ -78,6 +79,52 @@ func (r *Reporter) Progress(msg string) {
 		return
 	}
 	fmt.Fprintf(r.w, "%s\n", msg)
+}
+
+// ProgressDuration prints a completed timed operation when verbose mode is enabled.
+func (r *Reporter) ProgressDuration(label, outcome string, elapsed time.Duration, err error) {
+	if !r.verbose {
+		return
+	}
+	fmt.Fprintf(r.w, "%s ... %s %s\n", label, outcome, formatDuration(elapsed))
+	if err != nil {
+		fmt.Fprintf(r.w, "     error: %v\n", err)
+	}
+}
+
+// ProgressStart prints a grouped operation start line and returns a completion function.
+func (r *Reporter) ProgressStart(label string) func(outcome string, err error) {
+	if !r.verbose {
+		return func(string, error) {}
+	}
+	start := time.Now()
+	fmt.Fprintf(r.w, "%s ... start\n", label)
+	return func(outcome string, err error) {
+		r.ProgressDuration(label, outcome, time.Since(start), err)
+	}
+}
+
+// ProgressStep runs fn and prints the operation outcome and duration.
+func (r *Reporter) ProgressStep(label string, fn func() error) error {
+	start := time.Now()
+	err := fn()
+	outcome := "ok"
+	if err != nil {
+		outcome = "failed"
+	}
+	r.ProgressDuration(label, outcome, time.Since(start), err)
+	return err
+}
+
+func formatDuration(d time.Duration) string {
+	if d < time.Second {
+		ms := d.Round(time.Millisecond).Milliseconds()
+		if ms < 0 {
+			ms = 0
+		}
+		return fmt.Sprintf("%dms", ms)
+	}
+	return fmt.Sprintf("%.1fs", d.Seconds())
 }
 
 // Dim returns the text with dim styling (for use in formatted output).

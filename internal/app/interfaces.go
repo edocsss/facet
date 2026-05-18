@@ -1,6 +1,8 @@
 package app
 
 import (
+	"time"
+
 	"facet/internal/ai"
 	"facet/internal/deploy"
 	"facet/internal/packages"
@@ -26,6 +28,9 @@ type Reporter interface {
 	PrintLine(msg string)
 	Dim(text string) string
 	Progress(msg string)
+	ProgressDuration(label, outcome string, elapsed time.Duration, err error)
+	ProgressStart(label string) func(outcome string, err error)
+	ProgressStep(label string, fn func() error) error
 }
 
 // StateStore handles reading and writing apply state.

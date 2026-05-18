@@ -6,6 +6,10 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type mockProvider struct {
@@ -95,14 +99,37 @@ func (m *mockSkillsMgr) InstalledForSource(source string) ([]string, error) {
 func (m *mockSkillsMgr) Check() error  { return nil }
 func (m *mockSkillsMgr) Update() error { return nil }
 
-type mockReporter struct{}
+type mockReporter struct {
+	messages []string
+}
 
-func (m *mockReporter) Success(_ string)       {}
-func (m *mockReporter) Warning(_ string)       {}
-func (m *mockReporter) Error(_ string)         {}
-func (m *mockReporter) Header(_ string)        {}
-func (m *mockReporter) PrintLine(_ string)     {}
+func (m *mockReporter) Success(msg string)     { m.messages = append(m.messages, "success: "+msg) }
+func (m *mockReporter) Warning(msg string)     { m.messages = append(m.messages, "warning: "+msg) }
+func (m *mockReporter) Error(msg string)       { m.messages = append(m.messages, "error: "+msg) }
+func (m *mockReporter) Header(msg string)      { m.messages = append(m.messages, "header: "+msg) }
+func (m *mockReporter) PrintLine(msg string)   { m.messages = append(m.messages, "line: "+msg) }
 func (m *mockReporter) Dim(text string) string { return text }
+func (m *mockReporter) ProgressDuration(label, outcome string, _ time.Duration, err error) {
+	m.messages = append(m.messages, "progress: "+label+" ... "+outcome)
+	if err != nil {
+		m.messages = append(m.messages, "progress-error: "+err.Error())
+	}
+}
+func (m *mockReporter) ProgressStart(label string) func(outcome string, err error) {
+	m.messages = append(m.messages, "progress: "+label+" ... start")
+	return func(outcome string, err error) {
+		m.ProgressDuration(label, outcome, 0, err)
+	}
+}
+func (m *mockReporter) ProgressStep(label string, fn func() error) error {
+	err := fn()
+	outcome := "ok"
+	if err != nil {
+		outcome = "failed"
+	}
+	m.ProgressDuration(label, outcome, 0, err)
+	return err
+}
 
 type capturingReporter struct {
 	warnings  []string
@@ -115,6 +142,14 @@ func (c *capturingReporter) Error(_ string)         {}
 func (c *capturingReporter) Header(_ string)        {}
 func (c *capturingReporter) PrintLine(_ string)     {}
 func (c *capturingReporter) Dim(text string) string { return text }
+func (c *capturingReporter) ProgressDuration(string, string, time.Duration, error) {
+}
+func (c *capturingReporter) ProgressStart(string) func(string, error) {
+	return func(string, error) {}
+}
+func (c *capturingReporter) ProgressStep(_ string, fn func() error) error {
+	return fn()
+}
 
 func installSuccesses(successes []string) []string {
 	var installMessages []string
@@ -674,6 +709,87 @@ func TestOrchestrator_Apply_Order(t *testing.T) {
 			t.Fatalf("call[%d]: expected %q, got %q (%v)", i, want, tracker.calls[i], tracker.calls)
 		}
 	}
+}
+
+func TestOrchestrator_EmitsTimingForAIItems(t *testing.T) {
+	provider := &mockProvider{}
+	skillsMgr := &mockSkillsMgr{
+		sourceSkills: map[string][]string{
+			"owner/repo": {"code-review"},
+		},
+	}
+	reporter := &mockReporter{}
+	orch := NewOrchestrator(
+		map[string]AgentProvider{"claude-code": provider},
+		skillsMgr,
+		reporter,
+	)
+
+	config := EffectiveAIConfig{
+		"claude-code": {
+			Permissions: ResolvedPermissions{Allow: []string{"Read"}},
+			Skills: []ResolvedSkill{{
+				Source: "owner/repo",
+				Name:   "code-review",
+			}},
+			MCPs: []ResolvedMCP{{
+				Name:    "filesystem",
+				Command: "true",
+				Env:     map[string]string{"TOKEN": "super-secret-token"},
+			}},
+		},
+	}
+
+	_, err := orch.Apply(config, nil)
+	require.NoError(t, err)
+
+	out := strings.Join(reporter.messages, "\n")
+	assert.Contains(t, out, "progress: AI permissions ... start")
+	assert.Contains(t, out, "progress:   -> permissions claude-code ... ok")
+	assert.Contains(t, out, "progress: AI skills ... start")
+	assert.Contains(t, out, "progress:   -> skills install owner/repo [claude-code] ... ok")
+	assert.Contains(t, out, "progress:   -> skills verify owner/repo ... ok")
+	assert.Contains(t, out, "progress: AI MCPs ... start")
+	assert.Contains(t, out, "progress:   -> mcp register filesystem claude-code ... ok")
+	assert.NotContains(t, out, "super-secret-token")
+}
+
+func TestOrchestrator_EmitsFailedTimingForAIItems(t *testing.T) {
+	provider := &mockProvider{
+		applyPermErr:   errors.New("permission write failed"),
+		registerMCPErr: errors.New("mcp write failed"),
+	}
+	skillsMgr := &mockSkillsMgr{
+		installErr: errors.New("skill install failed"),
+	}
+	reporter := &mockReporter{}
+	orch := NewOrchestrator(
+		map[string]AgentProvider{"claude-code": provider},
+		skillsMgr,
+		reporter,
+	)
+
+	config := EffectiveAIConfig{
+		"claude-code": {
+			Permissions: ResolvedPermissions{Allow: []string{"Read"}},
+			Skills: []ResolvedSkill{{
+				Source: "owner/repo",
+				Name:   "code-review",
+			}},
+			MCPs: []ResolvedMCP{{
+				Name:    "filesystem",
+				Command: "true",
+			}},
+		},
+	}
+
+	_, err := orch.Apply(config, nil)
+	require.NoError(t, err)
+
+	out := strings.Join(reporter.messages, "\n")
+	assert.Contains(t, out, "progress:   -> permissions claude-code ... failed")
+	assert.Contains(t, out, "progress:   -> skills install owner/repo [claude-code] ... failed")
+	assert.Contains(t, out, "progress:   -> mcp register filesystem claude-code ... failed")
 }
 
 func TestOrchestrator_Apply_SkillInstallPartialFailure(t *testing.T) {
