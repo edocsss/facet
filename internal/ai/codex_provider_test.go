@@ -94,6 +94,31 @@ func TestCodexProvider_RegisterMCP(t *testing.T) {
 	}
 }
 
+func TestCodexProvider_RegisterMCP_StartupTimeout(t *testing.T) {
+	dir := t.TempDir()
+	mcpPath := filepath.Join(dir, "config.toml")
+	p := NewCodexProvider(mcpPath, mcpPath)
+
+	timeout := 60
+	mcp := ResolvedMCP{
+		Name:              "serena",
+		Command:           "serena",
+		Args:              []string{"start-mcp-server"},
+		StartupTimeoutSec: &timeout,
+	}
+	if err := p.RegisterMCP(mcp); err != nil {
+		t.Fatalf("RegisterMCP returned error: %v", err)
+	}
+
+	content, err := os.ReadFile(mcpPath)
+	if err != nil {
+		t.Fatalf("failed to read config: %v", err)
+	}
+	if !strings.Contains(string(content), "startup_timeout_sec = 60") {
+		t.Fatalf("expected startup timeout in config, got:\n%s", string(content))
+	}
+}
+
 func TestCodexProvider_RemoveMCP(t *testing.T) {
 	dir := t.TempDir()
 	settingsPath := filepath.Join(dir, "config.toml")

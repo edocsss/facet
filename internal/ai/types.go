@@ -14,10 +14,11 @@ type ResolvedSkill struct {
 
 // ResolvedMCP holds a fully resolved MCP configuration.
 type ResolvedMCP struct {
-	Name    string
-	Command string
-	Args    []string
-	Env     map[string]string
+	Name              string
+	Command           string
+	Args              []string
+	Env               map[string]string
+	StartupTimeoutSec *int
 }
 
 // EffectiveAgentConfig holds the fully resolved config for a single agent.

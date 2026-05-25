@@ -99,6 +99,9 @@ func appendCodexMCPBlock(content string, mcp ResolvedMCP) string {
 	b.WriteString("[" + header + "]\n")
 	b.WriteString("command = " + strconv.Quote(mcp.Command) + "\n")
 	b.WriteString("args = " + tomlStringArray(mcp.Args) + "\n")
+	if mcp.StartupTimeoutSec != nil {
+		b.WriteString("startup_timeout_sec = " + strconv.Itoa(*mcp.StartupTimeoutSec) + "\n")
+	}
 
 	if len(mcp.Env) > 0 {
 		keys := make([]string, 0, len(mcp.Env))

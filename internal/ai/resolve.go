@@ -54,10 +54,11 @@ func Resolve(cfg *profile.AIConfig) EffectiveAIConfig {
 					envCopy[k] = v
 				}
 				mcps = append(mcps, ResolvedMCP{
-					Name:    entry.Name,
-					Command: entry.Command,
-					Args:    argsCopy,
-					Env:     envCopy,
+					Name:              entry.Name,
+					Command:           entry.Command,
+					Args:              argsCopy,
+					Env:               envCopy,
+					StartupTimeoutSec: entry.StartupTimeoutSec,
 				})
 			}
 		}

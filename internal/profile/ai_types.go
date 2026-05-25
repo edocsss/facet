@@ -25,9 +25,10 @@ type SkillEntry struct {
 // MCPEntry describes a Model Context Protocol server to configure, optionally
 // scoped to specific agents.
 type MCPEntry struct {
-	Name    string            `yaml:"name"`
-	Command string            `yaml:"command"`
-	Args    []string          `yaml:"args,omitempty"`
-	Env     map[string]string `yaml:"env,omitempty"`
-	Agents  []string          `yaml:"agents,omitempty"`
+	Name              string            `yaml:"name"`
+	Command           string            `yaml:"command"`
+	Args              []string          `yaml:"args,omitempty"`
+	Env               map[string]string `yaml:"env,omitempty"`
+	Agents            []string          `yaml:"agents,omitempty"`
+	StartupTimeoutSec *int              `yaml:"startup_timeout_sec,omitempty"`
 }

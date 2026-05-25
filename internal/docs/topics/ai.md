@@ -138,6 +138,7 @@ Each MCP entry has:
 - `args`: optional argument list
 - `env`: optional environment variables; values support `${facet:...}`
 - `agents`: optional list limiting the MCP to specific agents
+- `startup_timeout_sec`: optional Codex-only startup timeout in seconds
 
 For Claude Code, MCPs are always registered at user scope
 (`claude mcp add --scope user ...`) so they are available across every project
