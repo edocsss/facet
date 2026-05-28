@@ -93,6 +93,43 @@ exit 0
 NPXEOF
 chmod +x "$HOME/mock-bin/npx"
 
+# ── Mock pi (for Pi extension management) ──
+MOCK_PI_LOG="$HOME/.mock-pi"
+touch "$MOCK_PI_LOG"
+
+cat > "$HOME/mock-bin/pi" << 'PIEOF'
+#!/bin/bash
+MOCK_PI_LOG="$HOME/.mock-pi"
+MOCK_PI_EXTENSIONS="$HOME/.mock-pi-extensions"
+touch "$MOCK_PI_EXTENSIONS"
+
+echo "pi $*" >> "$MOCK_PI_LOG"
+
+if [ "$1" = "extension" ] && [ "$2" = "install" ]; then
+    name="$3"
+    grep -qx "$name" "$MOCK_PI_EXTENSIONS" 2>/dev/null || echo "$name" >> "$MOCK_PI_EXTENSIONS"
+    echo "mock-pi: extension install $name"
+    exit 0
+fi
+
+if [ "$1" = "extension" ] && [ "$2" = "remove" ]; then
+    name="$3"
+    grep -vx "$name" "$MOCK_PI_EXTENSIONS" > "$MOCK_PI_EXTENSIONS.tmp" || true
+    mv "$MOCK_PI_EXTENSIONS.tmp" "$MOCK_PI_EXTENSIONS"
+    echo "mock-pi: extension remove $name"
+    exit 0
+fi
+
+if [ "$1" = "extension" ] && [ "$2" = "list" ]; then
+    cat "$MOCK_PI_EXTENSIONS"
+    exit 0
+fi
+
+echo "mock-pi: $*"
+exit 0
+PIEOF
+chmod +x "$HOME/mock-bin/pi"
+
 # ── Mock claude (for Claude Code MCP registration) ──
 # Tracks registered MCP names in $HOME/.mock-claude-mcps so that duplicate
 # `mcp add` calls fail with "already exists", matching real CLI behavior.

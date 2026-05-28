@@ -1,0 +1,72 @@
+#!/bin/bash
+# e2e/suites/18-pi-extensions.sh
+SUITE_DIR="${SUITE_DIR:-$(cd "$(dirname "$0")" && pwd)}"
+source "$SUITE_DIR/helpers.sh"
+
+setup_basic
+
+cat > "$HOME/dotfiles/base.yaml" << 'YAML'
+vars:
+  pi_extra: "@gotgenes/pi-session-tools"
+
+packages:
+  - name: pi-agent
+    install: echo install-pi-agent
+
+pi:
+  extensions:
+    - pi-lens
+    - pi-subagents
+    - "${facet:pi_extra}"
+YAML
+
+cat > "$HOME/dotfiles/profiles/work.yaml" << 'YAML'
+extends: base
+
+pi:
+  extensions:
+    - pi-subagents
+    - pi-interactive-shell
+YAML
+
+facet_apply work
+assert_file_exists "$HOME/.mock-pi"
+assert_file_contains "$HOME/.mock-pi" "pi extension install pi-lens"
+assert_file_contains "$HOME/.mock-pi" "pi extension install pi-subagents"
+assert_file_contains "$HOME/.mock-pi" "pi extension install @gotgenes/pi-session-tools"
+assert_file_contains "$HOME/.mock-pi" "pi extension install pi-interactive-shell"
+assert_json_field "$HOME/.facet/.state.json" '.pi.extensions[0]' '@gotgenes/pi-session-tools'
+echo "  pi extensions installed and recorded"
+
+: > "$HOME/.mock-pi"
+cat > "$HOME/dotfiles/base.yaml" << 'YAML'
+packages:
+  - name: pi-agent
+    install: echo install-pi-agent
+
+pi:
+  extensions:
+    - pi-lens
+YAML
+cat > "$HOME/dotfiles/profiles/work.yaml" << 'YAML'
+extends: base
+YAML
+facet_apply work
+assert_file_contains "$HOME/.mock-pi" "pi extension remove @gotgenes/pi-session-tools"
+assert_file_contains "$HOME/.mock-pi" "pi extension remove pi-interactive-shell"
+assert_file_contains "$HOME/.mock-pi" "pi extension remove pi-subagents"
+assert_file_contains "$HOME/.mock-pi" "pi extension install pi-lens"
+echo "  removed only previously managed undeclared extensions"
+
+: > "$HOME/.mock-pi"
+facet -c "$HOME/dotfiles" -s "$HOME/.facet" apply work --stages packages
+if [ -s "$HOME/.mock-pi" ]; then
+    echo "  ASSERT FAIL: --stages packages should not run pi extension commands"
+    cat "$HOME/.mock-pi"
+    exit 1
+fi
+echo "  --stages packages skips pi extensions"
+
+output=$(facet -c "$HOME/dotfiles" -s "$HOME/.facet" apply --dry-run work 2>&1)
+echo "$output" | grep -q "Pi extensions" || { echo "  ASSERT FAIL: dry-run should show Pi extensions"; echo "$output"; exit 1; }
+echo "  dry-run shows pi extension preview"
