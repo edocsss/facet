@@ -58,6 +58,11 @@ packages:
 configs:
   ~/.gitconfig: configs/.gitconfig
   ~/.zshrc: configs/.zshrc
+
+pi:
+  extensions:
+    - pi-lens
+    - pi-subagents
 ```
 
 ## `profiles/<name>.yaml`
@@ -108,6 +113,7 @@ All config layers use this schema:
 | `configs` | map[string]string | Target path to source path. See `facet docs deploy`. |
 | `pre_apply` | list of ScriptEntry | Scripts run before package install. See `facet docs scripts`. |
 | `post_apply` | list of ScriptEntry | Scripts run after package install. See `facet docs scripts`. |
+| `pi` | PiConfig | Pi coding-agent extension configuration. See `facet docs pi`. |
 | `ai` | AIConfig | AI agent configuration. See `facet docs ai`. |
 
 All fields are optional except `extends` in profile files.
