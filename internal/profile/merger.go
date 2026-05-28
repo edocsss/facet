@@ -26,6 +26,9 @@ func Merge(base, overlay *FacetConfig) (*FacetConfig, error) {
 	// Merge AI config
 	result.AI = mergeAI(base.AI, overlay.AI)
 
+	// Merge Pi config
+	result.Pi = mergePi(base.Pi, overlay.Pi)
+
 	// Merge pre_apply scripts (concatenation — base first, then overlay)
 	result.PreApply = mergeScripts(base.PreApply, overlay.PreApply)
 
@@ -139,6 +142,36 @@ func mergeConfigMeta(base, overlay map[string]ConfigProvenance) map[string]Confi
 
 // mergeScripts concatenates base scripts followed by overlay scripts.
 // No deduplication — if both layers define a script with the same name, both run.
+func mergePi(base, overlay *PiConfig) *PiConfig {
+	if base == nil && overlay == nil {
+		return nil
+	}
+	result := &PiConfig{}
+	seen := make(map[string]struct{})
+	for _, ext := range appendPiExtensions(nil, base) {
+		if _, ok := seen[ext]; ok {
+			continue
+		}
+		seen[ext] = struct{}{}
+		result.Extensions = append(result.Extensions, ext)
+	}
+	for _, ext := range appendPiExtensions(nil, overlay) {
+		if _, ok := seen[ext]; ok {
+			continue
+		}
+		seen[ext] = struct{}{}
+		result.Extensions = append(result.Extensions, ext)
+	}
+	return result
+}
+
+func appendPiExtensions(dst []string, cfg *PiConfig) []string {
+	if cfg == nil {
+		return dst
+	}
+	return append(dst, cfg.Extensions...)
+}
+
 func mergeScripts(base, overlay []ScriptEntry) []ScriptEntry {
 	if len(base) == 0 && len(overlay) == 0 {
 		return nil

@@ -23,6 +23,7 @@ func allTopics() []Topic {
 		{Name: "packages", Description: "Package installation entries"},
 		{Name: "scripts", Description: "Pre-apply and post-apply scripts"},
 		{Name: "deploy", Description: "Config file deployment (symlink vs template)"},
+		{Name: "pi", Description: "Pi extension management"},
 		{Name: "ai", Description: "AI agent configuration (permissions, MCPs, skills)"},
 		{Name: "merge", Description: "How base, profile, and .local layers combine"},
 		{Name: "commands", Description: "CLI commands and flags reference"},

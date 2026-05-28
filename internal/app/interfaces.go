@@ -6,6 +6,7 @@ import (
 	"facet/internal/ai"
 	"facet/internal/deploy"
 	"facet/internal/packages"
+	"facet/internal/pi"
 	"facet/internal/profile"
 )
 
@@ -57,6 +58,12 @@ type DeployerFactory func(configDir, homeDir string, vars map[string]any, ownedC
 type AIOrchestrator interface {
 	Apply(config ai.EffectiveAIConfig, previousState *ai.AIState) (*ai.AIState, error)
 	Unapply(previousState *ai.AIState) error
+}
+
+// PiManager handles Pi extension lifecycle.
+type PiManager interface {
+	Apply(config *pi.Config, previousState *pi.PiState) (*pi.PiState, error)
+	Unapply(previousState *pi.PiState) error
 }
 
 // SkillsManager handles interactive skill check and update operations.

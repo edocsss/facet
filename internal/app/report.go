@@ -9,6 +9,7 @@ import (
 	"facet/internal/ai"
 	"facet/internal/deploy"
 	"facet/internal/packages"
+	"facet/internal/pi"
 	"facet/internal/profile"
 )
 
@@ -43,6 +44,10 @@ func (a *App) printApplyReport(s *ApplyState) {
 		for _, cfg := range s.Configs {
 			a.reporter.Success(fmt.Sprintf("%-30s → %-30s (%s)", cfg.Target, cfg.Source, cfg.Strategy))
 		}
+	}
+
+	if s.Pi != nil {
+		a.printPiState(s.Pi)
 	}
 
 	if s.AI != nil {
@@ -85,6 +90,10 @@ func (a *App) printStatus(s *ApplyState, checks []ValidityCheck) {
 				a.reporter.Success(fmt.Sprintf("%-30s → %-30s (%s)", cfg.Target, cfg.Source, cfg.Strategy))
 			}
 		}
+	}
+
+	if s.Pi != nil {
+		a.printPiState(s.Pi)
 	}
 
 	if s.AI != nil {
@@ -161,6 +170,14 @@ func (a *App) printDryRun(profileName string, resolved *profile.FacetConfig, opt
 		}
 	}
 
+	// Pi extensions
+	if resolved.Pi != nil && len(resolved.Pi.Extensions) > 0 {
+		a.reporter.Header("Pi extensions to install")
+		for _, ext := range resolved.Pi.Extensions {
+			a.reporter.Success(ext)
+		}
+	}
+
 	// Post-apply scripts
 	if len(resolved.PostApply) > 0 {
 		a.reporter.Header("Post-apply scripts to run")
@@ -226,6 +243,13 @@ func (a *App) printAIDryRun(config ai.EffectiveAIConfig) {
 		for _, mcp := range agentCfg.MCPs {
 			a.reporter.Success(fmt.Sprintf("    MCP: %s %s", mcp.Name, a.reporter.Dim(mcp.Command)))
 		}
+	}
+}
+
+func (a *App) printPiState(piState *pi.PiState) {
+	a.reporter.Header("Pi")
+	for _, ext := range piState.Extensions {
+		a.reporter.Success(fmt.Sprintf("Extension: %s", ext))
 	}
 }
 

@@ -285,6 +285,22 @@ func TestMerge_ScriptsDeepCopy(t *testing.T) {
 	assert.Equal(t, "echo overlay", overlay.PreApply[0].Run)
 }
 
+func TestMergePiExtensions_UnionsByName(t *testing.T) {
+	base := &FacetConfig{Pi: &PiConfig{Extensions: []string{"pi-lens", "pi-subagents"}}}
+	overlay := &FacetConfig{Pi: &PiConfig{Extensions: []string{"pi-subagents", "@gotgenes/pi-session-tools"}}}
+
+	merged, err := Merge(base, overlay)
+	require.NoError(t, err)
+	require.NotNil(t, merged.Pi)
+	assert.Equal(t, []string{"pi-lens", "pi-subagents", "@gotgenes/pi-session-tools"}, merged.Pi.Extensions)
+}
+
+func TestMergePi_NilWhenAbsent(t *testing.T) {
+	merged, err := Merge(&FacetConfig{}, &FacetConfig{})
+	require.NoError(t, err)
+	assert.Nil(t, merged.Pi)
+}
+
 func TestAnnotateLayer_SetsConfigMetaAndScriptWorkDirs(t *testing.T) {
 	cfg := &FacetConfig{
 		Configs: map[string]string{

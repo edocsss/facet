@@ -471,7 +471,20 @@ Falls back to plain text if the terminal doesn't support colors.
 
 ---
 
-## 11. AI Configuration
+## 11. Pi Extensions
+
+`facet apply` reconciles Pi coding-agent extensions from a top-level
+`pi.extensions` list. Each declared extension is installed with
+`pi extension install <name>`, and previously managed extensions that are no
+longer declared are removed with `pi extension remove <name>`.
+
+Removal is state-scoped: Facet only removes extensions recorded in its own
+`.state.json`; manually installed Pi extensions are left untouched. The apply
+stage order is `configs → pre_apply → packages → pi → post_apply → ai`, so the
+Pi CLI can be installed during `packages` and post-apply scripts can assume Pi
+extensions are available.
+
+## 12. AI Configuration
 
 `facet apply` reconciles AI configuration for supported agents. Permissions and
 MCP registrations are applied per agent. Skill entries may either list explicit
@@ -499,7 +512,7 @@ because those names are available.
 
 ---
 
-## 12. Non-Requirements (v1)
+## 13. Non-Requirements (v1)
 
 | Feature | Why excluded |
 |---|---|

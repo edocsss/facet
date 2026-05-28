@@ -328,6 +328,26 @@ func TestResolve_AI_PermissionsDeepCopied(t *testing.T) {
 	assert.Equal(t, []string{"Bash"}, cfg.AI.Permissions["claude-code"].Deny)
 }
 
+func TestResolvePiExtensions_SubstitutesVariables(t *testing.T) {
+	cfg := &FacetConfig{
+		Vars: map[string]any{"pi_ext": "pi-lens"},
+		Pi:   &PiConfig{Extensions: []string{"${facet:pi_ext}", "pi-subagents"}},
+	}
+
+	resolved, err := Resolve(cfg)
+	require.NoError(t, err)
+	require.NotNil(t, resolved.Pi)
+	assert.Equal(t, []string{"pi-lens", "pi-subagents"}, resolved.Pi.Extensions)
+}
+
+func TestResolvePiExtensions_UndefinedVariableErrors(t *testing.T) {
+	cfg := &FacetConfig{Pi: &PiConfig{Extensions: []string{"${facet:missing}"}}}
+
+	_, err := Resolve(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pi.extensions[0]")
+}
+
 func TestResolve_PreApplyScriptVars(t *testing.T) {
 	cfg := &FacetConfig{
 		Vars: map[string]any{

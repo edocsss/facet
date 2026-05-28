@@ -19,6 +19,7 @@ type FacetConfig struct {
 	Configs    map[string]string           `yaml:"configs,omitempty"`
 	ConfigMeta map[string]ConfigProvenance `yaml:"-"`
 	AI         *AIConfig                   `yaml:"ai,omitempty"`
+	Pi         *PiConfig                   `yaml:"pi,omitempty"`
 	PreApply   []ScriptEntry               `yaml:"pre_apply,omitempty"`
 	PostApply  []ScriptEntry               `yaml:"post_apply,omitempty"`
 }
@@ -28,6 +29,11 @@ type ScriptEntry struct {
 	Name    string `yaml:"name"`
 	Run     string `yaml:"run"`
 	WorkDir string `yaml:"-"`
+}
+
+// PiConfig holds Pi-specific configuration.
+type PiConfig struct {
+	Extensions []string `yaml:"extensions,omitempty"`
 }
 
 type ConfigProvenance struct {

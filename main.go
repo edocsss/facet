@@ -13,6 +13,7 @@ import (
 	"facet/internal/common/reporter"
 	"facet/internal/deploy"
 	"facet/internal/packages"
+	"facet/internal/pi"
 	"facet/internal/profile"
 )
 
@@ -68,6 +69,7 @@ func main() {
 		),
 	}
 	aiOrchestrator := ai.NewOrchestrator(providers, skillsMgr, r)
+	piManager := pi.NewManager(aiRunner, r)
 
 	// Create app with all dependencies
 	application := app.New(app.Deps{
@@ -78,6 +80,7 @@ func main() {
 		StateStore:      stateStore,
 		DeployerFactory: deployerFactory,
 		AIOrchestrator:  aiOrchestrator,
+		PiManager:       piManager,
 		ScriptRunner:    scriptRunner,
 		SkillsManager:   skillsMgr,
 		Version:         "0.1.0",

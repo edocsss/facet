@@ -198,6 +198,22 @@ packages:
 
 If `check` exits 0, the install is skipped. If `check` is omitted, the install always runs.
 
+## Pi Extensions
+
+facet can manage Pi coding-agent extensions as first-class state:
+
+```yaml
+pi:
+  extensions:
+    - pi-interactive-shell
+    - pi-lens
+    - pi-subagents
+```
+
+During `facet apply`, Facet installs declared extensions and removes only those
+previously managed by Facet that are no longer declared. Manually installed Pi
+extensions are not touched.
+
 ## AI Configuration
 
 facet configures AI coding agents — permissions, skills, and MCP servers.

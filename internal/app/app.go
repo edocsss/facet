@@ -9,6 +9,7 @@ type Deps struct {
 	StateStore      StateStore
 	DeployerFactory DeployerFactory
 	AIOrchestrator  AIOrchestrator
+	PiManager       PiManager
 	ScriptRunner    ScriptRunner
 	SkillsManager   SkillsManager
 	Version         string
@@ -24,6 +25,7 @@ type App struct {
 	stateStore      StateStore
 	deployerFactory DeployerFactory
 	aiOrchestrator  AIOrchestrator
+	piManager       PiManager
 	scriptRunner    ScriptRunner
 	skillsManager   SkillsManager
 	version         string
@@ -40,6 +42,7 @@ func New(deps Deps) *App {
 		stateStore:      deps.StateStore,
 		deployerFactory: deps.DeployerFactory,
 		aiOrchestrator:  deps.AIOrchestrator,
+		piManager:       deps.PiManager,
 		scriptRunner:    deps.ScriptRunner,
 		skillsManager:   deps.SkillsManager,
 		version:         deps.Version,
