@@ -47,7 +47,7 @@ func Resolve(cfg *profile.AIConfig) EffectiveAIConfig {
 		// Step 3: filter MCPs
 		var mcps []ResolvedMCP
 		for _, entry := range cfg.MCPs {
-			if agentIncluded(agent, entry.Agents) {
+			if mcpAgentIncluded(agent, entry.Agents) {
 				argsCopy := append([]string{}, entry.Args...)
 				envCopy := make(map[string]string, len(entry.Env))
 				for k, v := range entry.Env {
@@ -80,6 +80,7 @@ var DefaultSkillAgents = map[string]bool{
 	"claude-code": true,
 	"cursor":      true,
 	"codex":       true,
+	"pi":          true,
 }
 
 // agentIncluded returns true if itemAgents is empty (meaning all agents)
@@ -108,4 +109,14 @@ func skillAgentIncluded(agent string, itemAgents []string) bool {
 		}
 	}
 	return false
+}
+
+// mcpAgentIncluded returns true if the agent should receive this MCP. Pi can
+// receive skills through npx but does not have a facet MCP provider, so
+// unscoped MCP entries do not target Pi by default.
+func mcpAgentIncluded(agent string, itemAgents []string) bool {
+	if len(itemAgents) == 0 && agent == "pi" {
+		return false
+	}
+	return agentIncluded(agent, itemAgents)
 }

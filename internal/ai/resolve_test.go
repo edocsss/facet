@@ -150,7 +150,7 @@ func TestResolve_AllSkillsWithAgentScoping(t *testing.T) {
 
 func TestResolve_SkillDefaultAgents_ExcludesNonDefault(t *testing.T) {
 	cfg := &profile.AIConfig{
-		Agents: []string{"claude-code", "cursor", "codex", "copilot", "gemini"},
+		Agents: []string{"claude-code", "cursor", "codex", "pi", "copilot", "gemini"},
 		Skills: []profile.SkillEntry{
 			{Source: "github.com/example/skills", Skills: []string{"shared-skill"}},
 		},
@@ -158,12 +158,13 @@ func TestResolve_SkillDefaultAgents_ExcludesNonDefault(t *testing.T) {
 
 	result := Resolve(cfg)
 	require.NotNil(t, result)
-	assert.Len(t, result, 5)
+	assert.Len(t, result, 6)
 
 	// Default agents get the skill.
 	assert.Len(t, result["claude-code"].Skills, 1)
 	assert.Len(t, result["cursor"].Skills, 1)
 	assert.Len(t, result["codex"].Skills, 1)
+	assert.Len(t, result["pi"].Skills, 1)
 
 	// Non-default agents do NOT get the skill.
 	assert.Len(t, result["copilot"].Skills, 0)
@@ -185,6 +186,21 @@ func TestResolve_SkillExplicitAgents_OverridesDefault(t *testing.T) {
 	assert.Len(t, result["copilot"].Skills, 1)
 	// claude-code is NOT in the explicit list, so it doesn't get it.
 	assert.Len(t, result["claude-code"].Skills, 0)
+}
+
+func TestResolve_UnscopedMCPDoesNotTargetPi(t *testing.T) {
+	cfg := &profile.AIConfig{
+		Agents: []string{"claude-code", "pi"},
+		MCPs: []profile.MCPEntry{
+			{Name: "filesystem", Command: "npx", Args: []string{"server"}},
+		},
+	}
+
+	result := Resolve(cfg)
+	require.NotNil(t, result)
+
+	assert.Len(t, result["claude-code"].MCPs, 1)
+	assert.Len(t, result["pi"].MCPs, 0)
 }
 
 func TestResolve_MixedAllAndSpecificSkills(t *testing.T) {

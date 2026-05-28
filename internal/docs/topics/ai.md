@@ -10,10 +10,12 @@ ai:
     - claude-code
     - cursor
     - codex
+    - pi
 ```
 
-facet has built-in providers for `claude-code`, `cursor`, and `codex`. If a config
-names an agent without a provider, facet warns and skips that agent.
+facet has built-in providers for `claude-code`, `cursor`, and `codex`. Skills
+can also target `pi`, which is the agent name accepted by `npx skills`. If a
+config names another agent without a provider, facet warns and skips that agent.
 
 ## Pi Extensions
 
@@ -86,8 +88,9 @@ Each skill entry has:
 - `skills`: optional list of skill names from that source. **If omitted, all skills
   from the source are installed** (equivalent to `npx skills add <source> --all`).
 - `agents`: optional list limiting installation to specific agents. When omitted,
-  skills are installed for `claude-code`, `cursor`, and `codex` only (not every
-  agent in `ai.agents`). To target other agents, list them explicitly.
+  skills are installed for `claude-code`, `cursor`, `codex`, and `pi` only (not every
+  agent in `ai.agents`). To target other agents, list them explicitly. The Pi
+  agent name passed to `npx skills` is `pi`.
 
 facet reconciles skills on every `facet apply`. If a previously managed source is
 removed or narrowed to fewer skills, facet removes the no-longer-declared skills
@@ -156,7 +159,8 @@ Each MCP entry has:
 - `command`: server executable
 - `args`: optional argument list
 - `env`: optional environment variables; values support `${facet:...}`
-- `agents`: optional list limiting the MCP to specific agents
+- `agents`: optional list limiting the MCP to specific agents. When omitted,
+  MCPs apply to provider-backed agents and do not target `pi`.
 - `startup_timeout_sec`: optional Codex-only startup timeout in seconds
 
 For Claude Code, MCPs are always registered at user scope
