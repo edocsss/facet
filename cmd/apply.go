@@ -15,7 +15,7 @@ func newApplyCmd(application *app.App, configDir, stateDir *string) *cobra.Comma
 		Short: "Apply a configuration profile",
 		Long: `Loads, merges, and applies a configuration profile to this machine.
 
-Stages run in this order: configs, pre_apply, packages, pi, post_apply, ai.
+Stages run in this order: configs, pre_apply, packages, post_apply, ai.
 Use --stages to run only specific stages (comma-separated).`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

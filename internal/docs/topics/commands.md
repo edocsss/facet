@@ -47,9 +47,8 @@ Valid stages (in execution order):
 | `configs` | Deploy symlinks, templates, and copied remote-base configs |
 | `pre_apply` | Run pre_apply scripts |
 | `packages` | Install packages |
-| `pi` | Install/remove managed Pi extensions |
 | `post_apply` | Run post_apply scripts |
-| `ai` | Apply AI configuration |
+| `ai` | Apply AI configuration, including managed Pi extensions |
 
 What it does:
 
@@ -60,10 +59,9 @@ What it does:
 5. Deploys config files (if `configs` stage)
 6. Runs pre_apply scripts (if `pre_apply` stage)
 7. Installs packages (if `packages` stage)
-8. Installs/removes managed Pi extensions (if `pi` stage)
-9. Runs post_apply scripts (if `post_apply` stage)
-10. Applies AI configuration (if `ai` stage)
-11. Writes `.state.json`
+8. Runs post_apply scripts (if `post_apply` stage)
+9. Applies AI configuration, including managed Pi extensions (if `ai` stage)
+10. Writes `.state.json`
 
 ## `facet status`
 

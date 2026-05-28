@@ -256,5 +256,8 @@ func mergeAI(base, overlay *AIConfig) *AIConfig {
 	// mcps: union by name
 	result.MCPs = mergeMCPs(base.MCPs, overlay.MCPs)
 
+	// pi: extension union by package name
+	result.Pi = mergePi(base.Pi, overlay.Pi)
+
 	return result
 }

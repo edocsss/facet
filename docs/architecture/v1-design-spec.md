@@ -473,16 +473,15 @@ Falls back to plain text if the terminal doesn't support colors.
 
 ## 11. Pi Extensions
 
-`facet apply` reconciles Pi coding-agent extensions from a top-level
-`pi.extensions` list. Each declared extension is installed with
-`pi extension install <name>`, and previously managed extensions that are no
-longer declared are removed with `pi extension remove <name>`.
+`facet apply` reconciles Pi coding-agent extensions from `ai.pi.extensions`.
+Each declared extension is installed with `pi extension install <name>`, and
+previously managed extensions that are no longer declared are removed with
+`pi extension remove <name>`.
 
 Removal is state-scoped: Facet only removes extensions recorded in its own
-`.state.json`; manually installed Pi extensions are left untouched. The apply
-stage order is `configs → pre_apply → packages → pi → post_apply → ai`, so the
-Pi CLI can be installed during `packages` and post-apply scripts can assume Pi
-extensions are available.
+`.state.json`; manually installed Pi extensions are left untouched. Pi extension
+reconciliation belongs to the `ai` stage, so `facet apply <profile> --stages ai`
+applies AI permissions, skills, MCPs, and Pi extensions together.
 
 ## 12. AI Configuration
 

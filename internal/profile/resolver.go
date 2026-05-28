@@ -42,12 +42,6 @@ func Resolve(cfg *FacetConfig) (*FacetConfig, error) {
 	}
 	result.AI = resolvedAI
 
-	resolvedPi, err := resolvePi(cfg.Pi, cfg.Vars)
-	if err != nil {
-		return nil, err
-	}
-	result.Pi = resolvedPi
-
 	if cfg.PreApply != nil {
 		result.PreApply = make([]ScriptEntry, len(cfg.PreApply))
 		for i, script := range cfg.PreApply {
@@ -203,6 +197,13 @@ func resolveAI(ai *AIConfig, vars map[string]any) (*AIConfig, error) {
 		}
 	}
 
+	// Resolve Pi extensions
+	resolvedPi, err := resolvePi(ai.Pi, vars)
+	if err != nil {
+		return nil, err
+	}
+	result.Pi = resolvedPi
+
 	// Resolve MCPs
 	if ai.MCPs != nil {
 		result.MCPs = make([]MCPEntry, len(ai.MCPs))
@@ -228,7 +229,7 @@ func resolvePi(piCfg *PiConfig, vars map[string]any) (*PiConfig, error) {
 		for i, ext := range piCfg.Extensions {
 			resolved, err := substituteVars(ext, vars)
 			if err != nil {
-				return nil, fmt.Errorf("pi.extensions[%d]: %w", i, err)
+				return nil, fmt.Errorf("ai.pi.extensions[%d]: %w", i, err)
 			}
 			result.Extensions[i] = resolved
 		}

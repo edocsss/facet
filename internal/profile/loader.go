@@ -60,8 +60,12 @@ func ValidateMergedConfig(cfg *FacetConfig) error {
 	if cfg.AI == nil {
 		return nil
 	}
+	needsAgents := len(cfg.AI.Permissions) > 0 || len(cfg.AI.Skills) > 0 || len(cfg.AI.MCPs) > 0
 	if len(cfg.AI.Agents) == 0 {
-		return fmt.Errorf("ai.agents must not be empty when ai section is present")
+		if needsAgents {
+			return fmt.Errorf("ai.agents must not be empty when ai permissions, skills, or mcps are present")
+		}
+		return nil
 	}
 
 	agentSet := make(map[string]bool, len(cfg.AI.Agents))

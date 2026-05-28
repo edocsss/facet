@@ -50,6 +50,9 @@ mcps:
     args:
       - "@modelcontextprotocol/server-filesystem"
       - /tmp
+pi:
+  extensions:
+    - pi-lens
 `
 	var cfg AIConfig
 	err := yaml.Unmarshal([]byte(input), &cfg)
@@ -75,6 +78,8 @@ mcps:
 
 	require.Len(t, cfg.MCPs, 2)
 	assert.Equal(t, "playwright", cfg.MCPs[0].Name)
+	require.NotNil(t, cfg.Pi)
+	assert.Equal(t, []string{"pi-lens"}, cfg.Pi.Extensions)
 }
 
 func TestAIConfig_UnmarshalYAML_Empty(t *testing.T) {

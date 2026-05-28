@@ -6,6 +6,12 @@ type AIConfig struct {
 	Permissions map[string]*PermissionsConfig `yaml:"permissions,omitempty"`
 	Skills      []SkillEntry                  `yaml:"skills,omitempty"`
 	MCPs        []MCPEntry                    `yaml:"mcps,omitempty"`
+	Pi          *PiConfig                     `yaml:"pi,omitempty"`
+}
+
+// PiConfig holds Pi-specific AI tooling configuration.
+type PiConfig struct {
+	Extensions []string `yaml:"extensions,omitempty"`
 }
 
 // PermissionsConfig defines allow/deny lists for AI agent tool permissions.

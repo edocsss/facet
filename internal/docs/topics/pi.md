@@ -1,15 +1,16 @@
 # Pi Extensions
 
-The `pi:` block manages Pi coding-agent extensions during `facet apply`.
+Pi coding-agent extensions are managed inside the `ai:` block:
 
 ```yaml
-pi:
-  extensions:
-    - pi-interactive-shell
-    - pi-lens
-    - pi-subagents
-    - "@juicesharp/rpiv-btw"
-    - "@gotgenes/pi-session-tools"
+ai:
+  pi:
+    extensions:
+      - pi-interactive-shell
+      - pi-lens
+      - pi-subagents
+      - "@juicesharp/rpiv-btw"
+      - "@gotgenes/pi-session-tools"
 ```
 
 ## Behavior
@@ -21,7 +22,7 @@ pi extension install <name>
 ```
 
 Facet removes only extensions that were previously managed by Facet and are no
-longer declared in the resolved config:
+longer declared in the resolved `ai.pi.extensions` config:
 
 ```sh
 pi extension remove <name>
@@ -31,11 +32,9 @@ Manually installed Pi extensions are left untouched.
 
 ## Stage
 
-Pi extensions run in the `pi` apply stage, after `packages` and before
-`post_apply`:
+Pi extensions are reconciled as part of the `ai` apply stage. Use this to run
+only AI configuration, including Pi extensions:
 
-```text
-configs → pre_apply → packages → pi → post_apply → ai
+```sh
+facet apply work --stages ai
 ```
-
-Use `--stages pi` to run only Pi extension reconciliation.
