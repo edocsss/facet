@@ -13,20 +13,22 @@ packages:
   - name: pi-agent
     install: echo install-pi-agent
 
-pi:
-  extensions:
-    - pi-lens
-    - pi-subagents
-    - "${facet:pi_extra}"
+ai:
+  pi:
+    extensions:
+      - pi-lens
+      - pi-subagents
+      - "${facet:pi_extra}"
 YAML
 
 cat > "$HOME/dotfiles/profiles/work.yaml" << 'YAML'
 extends: base
 
-pi:
-  extensions:
-    - pi-subagents
-    - pi-interactive-shell
+ai:
+  pi:
+    extensions:
+      - pi-subagents
+      - pi-interactive-shell
 YAML
 
 facet_apply work
@@ -35,8 +37,8 @@ assert_file_contains "$HOME/.mock-pi" "pi extension install pi-lens"
 assert_file_contains "$HOME/.mock-pi" "pi extension install pi-subagents"
 assert_file_contains "$HOME/.mock-pi" "pi extension install @gotgenes/pi-session-tools"
 assert_file_contains "$HOME/.mock-pi" "pi extension install pi-interactive-shell"
-assert_json_field "$HOME/.facet/.state.json" '.pi.extensions[0]' '@gotgenes/pi-session-tools'
-echo "  pi extensions installed and recorded"
+assert_json_field "$HOME/.facet/.state.json" '.ai.pi.extensions[0]' '@gotgenes/pi-session-tools'
+echo "  ai.pi.extensions installed and recorded"
 
 : > "$HOME/.mock-pi"
 cat > "$HOME/dotfiles/base.yaml" << 'YAML'
@@ -44,9 +46,10 @@ packages:
   - name: pi-agent
     install: echo install-pi-agent
 
-pi:
-  extensions:
-    - pi-lens
+ai:
+  pi:
+    extensions:
+      - pi-lens
 YAML
 cat > "$HOME/dotfiles/profiles/work.yaml" << 'YAML'
 extends: base
@@ -65,8 +68,13 @@ if [ -s "$HOME/.mock-pi" ]; then
     cat "$HOME/.mock-pi"
     exit 1
 fi
-echo "  --stages packages skips pi extensions"
+echo "  --stages packages skips ai pi extensions"
+
+: > "$HOME/.mock-pi"
+facet -c "$HOME/dotfiles" -s "$HOME/.facet" apply work --stages ai
+assert_file_contains "$HOME/.mock-pi" "pi extension install pi-lens"
+echo "  --stages ai runs pi extension reconciliation"
 
 output=$(facet -c "$HOME/dotfiles" -s "$HOME/.facet" apply --dry-run work 2>&1)
-echo "$output" | grep -q "Pi extensions" || { echo "  ASSERT FAIL: dry-run should show Pi extensions"; echo "$output"; exit 1; }
-echo "  dry-run shows pi extension preview"
+echo "$output" | grep -q "AI Pi extensions" || { echo "  ASSERT FAIL: dry-run should show AI Pi extensions"; echo "$output"; exit 1; }
+echo "  dry-run shows ai pi extension preview"

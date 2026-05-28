@@ -17,7 +17,7 @@ import (
 
 // validStages returns the ordered list of stage names that --stages accepts.
 func validStages() []string {
-	return []string{"configs", "pre_apply", "packages", "pi", "post_apply", "ai"}
+	return []string{"configs", "pre_apply", "packages", "post_apply", "ai"}
 }
 
 // ValidStagesCSV returns the valid stage names as a comma-separated string for help text.
@@ -212,7 +212,12 @@ func (a *App) Apply(profileName string, opts ApplyOpts) (applyErr error) {
 	if prevState != nil {
 		prevConfigs = prevState.Configs
 		prevAIState = prevState.AI
-		prevPiState = prevState.Pi
+		if prevState.AI != nil {
+			prevPiState = prevState.AI.Pi
+		}
+		if prevPiState == nil {
+			prevPiState = prevState.LegacyPi
+		}
 	}
 
 	// Unapply previous state if needed
@@ -221,7 +226,7 @@ func (a *App) Apply(profileName string, opts ApplyOpts) (applyErr error) {
 		if shouldUnapply {
 			willUnapplyConfigs := stages["configs"] && len(prevState.Configs) > 0
 			willUnapplyAI := stages["ai"] && a.aiOrchestrator != nil && prevState.AI != nil
-			willUnapplyPi := stages["pi"] && a.piManager != nil && prevState.Pi != nil
+			willUnapplyPi := stages["ai"] && a.piManager != nil && prevPiState != nil
 			if willUnapplyConfigs || willUnapplyAI || willUnapplyPi {
 				done := a.reporter.ProgressStart("Unapplying previous state")
 				if willUnapplyAI {
@@ -234,7 +239,7 @@ func (a *App) Apply(profileName string, opts ApplyOpts) (applyErr error) {
 				}
 				if willUnapplyPi {
 					if err := a.reporter.ProgressStep("  -> Pi unapply", func() error {
-						return a.piManager.Unapply(prevState.Pi)
+						return a.piManager.Unapply(prevPiState)
 					}); err != nil {
 						a.reporter.Error(fmt.Sprintf("Pi unapply failed: %v", err))
 					}
@@ -391,24 +396,6 @@ func (a *App) Apply(profileName string, opts ApplyOpts) (applyErr error) {
 		}
 	}
 
-	// Stage: pi
-	var piState *pi.PiState
-	var effectivePi *pi.Config
-	if resolved.Pi != nil {
-		effectivePi = &pi.Config{Extensions: append([]string{}, resolved.Pi.Extensions...)}
-	}
-	if stages["pi"] && a.piManager != nil && (effectivePi != nil || prevPiState != nil) {
-		done := a.reporter.ProgressStart("Applying Pi extensions")
-		var piErr error
-		piState, piErr = a.piManager.Apply(effectivePi, prevPiState)
-		if piErr != nil {
-			a.reporter.Error(fmt.Sprintf("Pi extensions failed: %v", piErr))
-			done("failed", piErr)
-		} else {
-			done("done", nil)
-		}
-	}
-
 	// Stage: post_apply
 	if stages["post_apply"] {
 		if len(resolved.PostApply) > 0 {
@@ -423,13 +410,38 @@ func (a *App) Apply(profileName string, opts ApplyOpts) (applyErr error) {
 
 	// Stage: ai
 	var aiState *ai.AIState
+	var piState *pi.PiState
 	effectiveAI := ai.Resolve(resolved.AI)
-	if stages["ai"] && a.aiOrchestrator != nil && (effectiveAI != nil || prevAIState != nil) {
+	var effectivePi *pi.Config
+	if resolved.AI != nil && resolved.AI.Pi != nil {
+		effectivePi = &pi.Config{Extensions: append([]string{}, resolved.AI.Pi.Extensions...)}
+	}
+	if stages["ai"] && ((a.aiOrchestrator != nil && (effectiveAI != nil || prevAIState != nil)) || (a.piManager != nil && (effectivePi != nil || prevPiState != nil))) {
 		done := a.reporter.ProgressStart("Applying AI configuration")
 		var aiErr error
-		aiState, aiErr = a.aiOrchestrator.Apply(effectiveAI, prevAIState)
+		if a.aiOrchestrator != nil && (effectiveAI != nil || prevAIState != nil) {
+			aiState, aiErr = a.aiOrchestrator.Apply(effectiveAI, prevAIState)
+			if aiErr != nil {
+				a.reporter.Error(fmt.Sprintf("AI configuration failed: %v", aiErr))
+			}
+		}
+		if a.piManager != nil && (effectivePi != nil || prevPiState != nil) {
+			var piErr error
+			piState, piErr = a.piManager.Apply(effectivePi, prevPiState)
+			if piErr != nil {
+				a.reporter.Error(fmt.Sprintf("Pi extensions failed: %v", piErr))
+				if aiErr == nil {
+					aiErr = piErr
+				}
+			}
+		}
+		if piState != nil {
+			if aiState == nil {
+				aiState = &ai.AIState{}
+			}
+			aiState.Pi = piState
+		}
 		if aiErr != nil {
-			a.reporter.Error(fmt.Sprintf("AI configuration failed: %v", aiErr))
 			done("failed", aiErr)
 		} else {
 			done("done", nil)
@@ -450,11 +462,11 @@ func (a *App) Apply(profileName string, opts ApplyOpts) (applyErr error) {
 	if !stages["packages"] && prevState != nil {
 		pkgResults = prevState.Packages
 	}
-	if !stages["pi"] && prevState != nil {
-		piState = prevState.Pi
-	}
 	if !stages["ai"] && prevState != nil {
 		aiState = prevState.AI
+		if aiState == nil && prevState.LegacyPi != nil {
+			aiState = &ai.AIState{Pi: prevState.LegacyPi}
+		}
 	}
 
 	appliedProfile := profileName
@@ -469,7 +481,6 @@ func (a *App) Apply(profileName string, opts ApplyOpts) (applyErr error) {
 		FacetVersion: a.version,
 		Packages:     pkgResults,
 		Configs:      configResults,
-		Pi:           piState,
 		AI:           aiState,
 	}
 
@@ -524,7 +535,7 @@ func isEmptyAIState(state *ai.AIState) bool {
 	if state == nil {
 		return true
 	}
-	return len(state.Skills) == 0 && len(state.MCPs) == 0 && len(state.Permissions) == 0
+	return len(state.Skills) == 0 && len(state.MCPs) == 0 && len(state.Permissions) == 0 && state.Pi == nil
 }
 
 func mergeConfigResults(prevConfigs, deployedConfigs []deploy.ConfigResult, keepTargets map[string]bool, preserveAllPrevious bool) []deploy.ConfigResult {

@@ -46,12 +46,10 @@ func (a *App) printApplyReport(s *ApplyState) {
 		}
 	}
 
-	if s.Pi != nil {
-		a.printPiState(s.Pi)
-	}
-
 	if s.AI != nil {
 		a.printAIState(s.AI)
+	} else if s.LegacyPi != nil {
+		a.printAIState(&ai.AIState{Pi: s.LegacyPi})
 	}
 }
 
@@ -92,12 +90,10 @@ func (a *App) printStatus(s *ApplyState, checks []ValidityCheck) {
 		}
 	}
 
-	if s.Pi != nil {
-		a.printPiState(s.Pi)
-	}
-
 	if s.AI != nil {
 		a.printAIState(s.AI)
+	} else if s.LegacyPi != nil {
+		a.printAIState(&ai.AIState{Pi: s.LegacyPi})
 	}
 }
 
@@ -171,9 +167,9 @@ func (a *App) printDryRun(profileName string, resolved *profile.FacetConfig, opt
 	}
 
 	// Pi extensions
-	if resolved.Pi != nil && len(resolved.Pi.Extensions) > 0 {
-		a.reporter.Header("Pi extensions to install")
-		for _, ext := range resolved.Pi.Extensions {
+	if resolved.AI != nil && resolved.AI.Pi != nil && len(resolved.AI.Pi.Extensions) > 0 {
+		a.reporter.Header("AI Pi extensions to install")
+		for _, ext := range resolved.AI.Pi.Extensions {
 			a.reporter.Success(ext)
 		}
 	}
@@ -255,6 +251,10 @@ func (a *App) printPiState(piState *pi.PiState) {
 
 func (a *App) printAIState(aiState *ai.AIState) {
 	a.reporter.Header("AI")
+
+	if aiState.Pi != nil {
+		a.printPiState(aiState.Pi)
+	}
 
 	if len(aiState.Permissions) > 0 {
 		agents := make([]string, 0, len(aiState.Permissions))

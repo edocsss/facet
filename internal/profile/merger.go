@@ -26,9 +26,6 @@ func Merge(base, overlay *FacetConfig) (*FacetConfig, error) {
 	// Merge AI config
 	result.AI = mergeAI(base.AI, overlay.AI)
 
-	// Merge Pi config
-	result.Pi = mergePi(base.Pi, overlay.Pi)
-
 	// Merge pre_apply scripts (concatenation — base first, then overlay)
 	result.PreApply = mergeScripts(base.PreApply, overlay.PreApply)
 

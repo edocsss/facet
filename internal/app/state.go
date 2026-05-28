@@ -23,7 +23,7 @@ type ApplyState struct {
 	FacetVersion string                   `json:"facet_version"`
 	Packages     []packages.PackageResult `json:"packages"`
 	Configs      []deploy.ConfigResult    `json:"configs"`
-	Pi           *pi.PiState              `json:"pi,omitempty"`
+	LegacyPi     *pi.PiState              `json:"pi,omitempty"`
 	AI           *ai.AIState              `json:"ai,omitempty"`
 }
 

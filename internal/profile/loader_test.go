@@ -55,19 +55,21 @@ configs:
 	assert.Equal(t, "configs/.gitconfig", cfg.Configs["~/.gitconfig"])
 }
 
-func TestLoadConfig_WithPiExtensions(t *testing.T) {
+func TestLoadConfig_WithAIPiExtensions(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "base.yaml")
-	require.NoError(t, os.WriteFile(path, []byte(`pi:
-  extensions:
-    - pi-interactive-shell
-    - "@gotgenes/pi-session-tools"
+	require.NoError(t, os.WriteFile(path, []byte(`ai:
+  pi:
+    extensions:
+      - pi-interactive-shell
+      - "@gotgenes/pi-session-tools"
 `), 0o644))
 
 	cfg, err := NewLoader().LoadConfig(path)
 	require.NoError(t, err)
-	require.NotNil(t, cfg.Pi)
-	assert.Equal(t, []string{"pi-interactive-shell", "@gotgenes/pi-session-tools"}, cfg.Pi.Extensions)
+	require.NotNil(t, cfg.AI)
+	require.NotNil(t, cfg.AI.Pi)
+	assert.Equal(t, []string{"pi-interactive-shell", "@gotgenes/pi-session-tools"}, cfg.AI.Pi.Extensions)
 }
 
 func TestLoadConfig_Profile_ExtendsBase(t *testing.T) {
@@ -147,14 +149,28 @@ func TestValidateProfile_MissingExtends(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestValidateProfile_AIEmptyAgents(t *testing.T) {
+func TestValidateProfile_AIEmptyAgentsWithAgentScopedConfig(t *testing.T) {
 	cfg := &FacetConfig{
 		Extends: "base",
-		AI:      &AIConfig{Agents: []string{}},
+		AI: &AIConfig{
+			Agents: []string{},
+			Permissions: map[string]*PermissionsConfig{
+				"claude-code": {Allow: []string{"Read"}},
+			},
+		},
 	}
 	err := ValidateMergedConfig(cfg)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "agents")
+}
+
+func TestValidateProfile_AIPiWithoutAgents(t *testing.T) {
+	cfg := &FacetConfig{
+		Extends: "base",
+		AI:      &AIConfig{Pi: &PiConfig{Extensions: []string{"pi-lens"}}},
+	}
+	err := ValidateMergedConfig(cfg)
+	assert.NoError(t, err)
 }
 
 func TestValidateProfile_AIPermissionsUnknownAgent(t *testing.T) {

@@ -1,10 +1,13 @@
 package ai
 
+import "facet/internal/pi"
+
 // AIState tracks facet-managed AI configuration in .state.json.
 type AIState struct {
 	Skills      []SkillState               `json:"skills"`
 	MCPs        []MCPState                 `json:"mcps"`
 	Permissions map[string]PermissionState `json:"permissions"`
+	Pi          *pi.PiState                `json:"pi,omitempty"`
 }
 
 // SkillState records a managed skill and which agents it was installed for.

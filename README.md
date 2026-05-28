@@ -200,19 +200,20 @@ If `check` exits 0, the install is skipped. If `check` is omitted, the install a
 
 ## Pi Extensions
 
-facet can manage Pi coding-agent extensions as first-class state:
+facet manages Pi coding-agent extensions under the AI configuration:
 
 ```yaml
-pi:
-  extensions:
-    - pi-interactive-shell
-    - pi-lens
-    - pi-subagents
+ai:
+  pi:
+    extensions:
+      - pi-interactive-shell
+      - pi-lens
+      - pi-subagents
 ```
 
-During `facet apply`, Facet installs declared extensions and removes only those
-previously managed by Facet that are no longer declared. Manually installed Pi
-extensions are not touched.
+During the `ai` apply stage, Facet installs declared extensions and removes only
+those previously managed by Facet that are no longer declared. Manually installed
+Pi extensions are not touched.
 
 ## AI Configuration
 

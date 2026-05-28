@@ -46,21 +46,40 @@ func TestFileStateStore_WriteAndRead(t *testing.T) {
 	assert.Equal(t, deploy.StrategyTemplate, loaded.Configs[0].Strategy)
 }
 
-func TestStateStore_RoundTripsPiState(t *testing.T) {
+func TestStateStore_RoundTripsAIPiState(t *testing.T) {
 	dir := t.TempDir()
 	store := NewFileStateStore()
 	original := &ApplyState{
 		Profile:      "work",
 		AppliedAt:    time.Now().UTC(),
 		FacetVersion: "test",
-		Pi:           &pi.PiState{Extensions: []string{"pi-lens", "pi-subagents"}},
+		AI:           &ai.AIState{Pi: &pi.PiState{Extensions: []string{"pi-lens", "pi-subagents"}}},
 	}
 
 	require.NoError(t, store.Write(dir, original))
 	loaded, err := store.Read(dir)
 	require.NoError(t, err)
-	require.NotNil(t, loaded.Pi)
-	assert.Equal(t, []string{"pi-lens", "pi-subagents"}, loaded.Pi.Extensions)
+	require.NotNil(t, loaded.AI)
+	require.NotNil(t, loaded.AI.Pi)
+	assert.Equal(t, []string{"pi-lens", "pi-subagents"}, loaded.AI.Pi.Extensions)
+}
+
+func TestStateStore_ReadsLegacyTopLevelPiState(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileStateStore()
+
+	data := []byte(`{
+		"profile":"work",
+		"applied_at":"2026-05-28T00:00:00Z",
+		"facet_version":"test",
+		"pi":{"extensions":["pi-lens"]}
+	}`)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".state.json"), data, 0o644))
+
+	loaded, err := store.Read(dir)
+	require.NoError(t, err)
+	require.NotNil(t, loaded.LegacyPi)
+	assert.Equal(t, []string{"pi-lens"}, loaded.LegacyPi.Extensions)
 }
 
 func TestFileStateStore_Read_Missing(t *testing.T) {

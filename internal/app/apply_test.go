@@ -299,7 +299,7 @@ func TestApply_WithPiExtensions(t *testing.T) {
 			filepath.Join(cfgDir, "base.yaml"): baseCfg,
 			filepath.Join(cfgDir, "profiles", "work.yaml"): {
 				Extends: "base",
-				Pi:      &profile.PiConfig{Extensions: []string{"pi-lens"}},
+				AI:      &profile.AIConfig{Pi: &profile.PiConfig{Extensions: []string{"pi-lens"}}},
 			},
 			filepath.Join(stateDir, ".local.yaml"): {},
 		},
@@ -323,8 +323,9 @@ func TestApply_WithPiExtensions(t *testing.T) {
 	assert.True(t, piMgr.applyCalled)
 	require.NotNil(t, piMgr.applyConfig)
 	assert.Equal(t, []string{"pi-lens"}, piMgr.applyConfig.Extensions)
-	require.NotNil(t, stateStore.written.Pi)
-	assert.Equal(t, []string{"pi-lens"}, stateStore.written.Pi.Extensions)
+	require.NotNil(t, stateStore.written.AI)
+	require.NotNil(t, stateStore.written.AI.Pi)
+	assert.Equal(t, []string{"pi-lens"}, stateStore.written.AI.Pi.Extensions)
 }
 
 func TestApply_SameProfileRemovalOfPiSectionReconcilesPreviousState(t *testing.T) {
@@ -333,7 +334,7 @@ func TestApply_SameProfileRemovalOfPiSectionReconcilesPreviousState(t *testing.T
 	require.NoError(t, os.WriteFile(filepath.Join(stateDir, ".local.yaml"), []byte(""), 0o644))
 
 	piMgr := &mockPiManager{}
-	stateStore := &mockStateStore{state: &ApplyState{Profile: "work", Pi: &pi.PiState{Extensions: []string{"pi-lens"}}}}
+	stateStore := &mockStateStore{state: &ApplyState{Profile: "work", AI: &ai.AIState{Pi: &pi.PiState{Extensions: []string{"pi-lens"}}}}}
 	baseCfg := &profile.FacetConfig{}
 	loader := &mockLoader{meta: &profile.FacetMeta{}, configs: map[string]*profile.FacetConfig{
 		filepath.Join(cfgDir, "base.yaml"):             baseCfg,
@@ -347,7 +348,7 @@ func TestApply_SameProfileRemovalOfPiSectionReconcilesPreviousState(t *testing.T
 	require.NoError(t, a.Apply("work", ApplyOpts{ConfigDir: cfgDir, StateDir: stateDir}))
 	assert.True(t, piMgr.applyCalled)
 	assert.Nil(t, piMgr.applyConfig)
-	assert.Nil(t, stateStore.written.Pi)
+	assert.Nil(t, stateStore.written.AI)
 }
 
 func TestApply_ProfileSwitchTriggersPiUnapply(t *testing.T) {
@@ -357,13 +358,13 @@ func TestApply_ProfileSwitchTriggersPiUnapply(t *testing.T) {
 
 	prevPi := &pi.PiState{Extensions: []string{"pi-lens"}}
 	piMgr := &mockPiManager{}
-	stateStore := &mockStateStore{state: &ApplyState{Profile: "work", Pi: prevPi}}
+	stateStore := &mockStateStore{state: &ApplyState{Profile: "work", AI: &ai.AIState{Pi: prevPi}}}
 	baseCfg := &profile.FacetConfig{}
 	loader := &mockLoader{meta: &profile.FacetMeta{}, configs: map[string]*profile.FacetConfig{
 		filepath.Join(cfgDir, "base.yaml"): baseCfg,
 		filepath.Join(cfgDir, "profiles", "personal.yaml"): {
 			Extends: "base",
-			Pi:      &profile.PiConfig{Extensions: []string{"pi-subagents"}},
+			AI:      &profile.AIConfig{Pi: &profile.PiConfig{Extensions: []string{"pi-subagents"}}},
 		},
 		filepath.Join(stateDir, ".local.yaml"): {},
 	}}
@@ -385,7 +386,7 @@ func TestApply_StagesPackagesPreservesPreviousPiState(t *testing.T) {
 
 	prevPi := &pi.PiState{Extensions: []string{"pi-lens"}}
 	piMgr := &mockPiManager{}
-	stateStore := &mockStateStore{state: &ApplyState{Profile: "work", Pi: prevPi}}
+	stateStore := &mockStateStore{state: &ApplyState{Profile: "work", AI: &ai.AIState{Pi: prevPi}}}
 	baseCfg := &profile.FacetConfig{Packages: []profile.PackageEntry{{Name: "git", Install: profile.InstallCmd{Command: "true"}}}}
 	loader := &mockLoader{meta: &profile.FacetMeta{}, configs: map[string]*profile.FacetConfig{
 		filepath.Join(cfgDir, "profiles", "work.yaml"): {Extends: "base"},
@@ -399,7 +400,8 @@ func TestApply_StagesPackagesPreservesPreviousPiState(t *testing.T) {
 	require.NoError(t, a.Apply("work", ApplyOpts{ConfigDir: cfgDir, StateDir: stateDir, Stages: "packages"}))
 	assert.True(t, installerCalled)
 	assert.False(t, piMgr.applyCalled)
-	assert.Equal(t, prevPi, stateStore.written.Pi)
+	require.NotNil(t, stateStore.written.AI)
+	assert.Equal(t, prevPi, stateStore.written.AI.Pi)
 }
 
 func TestApply_WithAI(t *testing.T) {

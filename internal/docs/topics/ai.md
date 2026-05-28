@@ -15,6 +15,25 @@ ai:
 facet has built-in providers for `claude-code`, `cursor`, and `codex`. If a config
 names an agent without a provider, facet warns and skips that agent.
 
+## Pi Extensions
+
+Manage Pi coding-agent extensions under `ai.pi.extensions`:
+
+```yaml
+ai:
+  pi:
+    extensions:
+      - pi-interactive-shell
+      - pi-lens
+      - pi-subagents
+```
+
+Pi extensions are reconciled during the `ai` apply stage. Facet installs declared
+extensions with `pi extension install <name>` and removes only previously
+Facet-managed extensions that are no longer declared. Manually installed Pi
+extensions are left untouched. `ai.pi` may be used without `ai.agents` when no
+agent-scoped permissions, skills, or MCPs are configured.
+
 ## Permissions
 
 Permissions are configured per agent using that agent's native terms.
