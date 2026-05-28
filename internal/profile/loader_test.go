@@ -55,6 +55,21 @@ configs:
 	assert.Equal(t, "configs/.gitconfig", cfg.Configs["~/.gitconfig"])
 }
 
+func TestLoadConfig_WithPiExtensions(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "base.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`pi:
+  extensions:
+    - pi-interactive-shell
+    - "@gotgenes/pi-session-tools"
+`), 0o644))
+
+	cfg, err := NewLoader().LoadConfig(path)
+	require.NoError(t, err)
+	require.NotNil(t, cfg.Pi)
+	assert.Equal(t, []string{"pi-interactive-shell", "@gotgenes/pi-session-tools"}, cfg.Pi.Extensions)
+}
+
 func TestLoadConfig_Profile_ExtendsBase(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "profiles", "work.yaml"), `
