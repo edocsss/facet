@@ -13,6 +13,7 @@ import (
 	"facet/internal/ai"
 	"facet/internal/deploy"
 	"facet/internal/packages"
+	"facet/internal/pi"
 	"facet/internal/profile"
 )
 
@@ -257,6 +258,148 @@ func (m *mockAIOrchestrator) Unapply(previousState *ai.AIState) error {
 	m.unapplyCalled = true
 	m.unapplyPrev = previousState
 	return m.unapplyErr
+}
+
+type mockPiManager struct {
+	applyCalled   bool
+	applyConfig   *pi.Config
+	applyPrev     *pi.PiState
+	applyResult   *pi.PiState
+	applyErr      error
+	unapplyCalled bool
+	unapplyPrev   *pi.PiState
+	unapplyErr    error
+}
+
+func (m *mockPiManager) Apply(config *pi.Config, previousState *pi.PiState) (*pi.PiState, error) {
+	m.applyCalled = true
+	m.applyConfig = config
+	m.applyPrev = previousState
+	return m.applyResult, m.applyErr
+}
+
+func (m *mockPiManager) Unapply(previousState *pi.PiState) error {
+	m.unapplyCalled = true
+	m.unapplyPrev = previousState
+	return m.unapplyErr
+}
+
+func TestApply_WithPiExtensions(t *testing.T) {
+	cfgDir := t.TempDir()
+	stateDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, ".local.yaml"), []byte(""), 0o644))
+
+	piMgr := &mockPiManager{applyResult: &pi.PiState{Extensions: []string{"pi-lens"}}}
+	stateStore := &mockStateStore{}
+	baseCfg := &profile.FacetConfig{}
+
+	loader := &mockLoader{
+		meta: &profile.FacetMeta{},
+		configs: map[string]*profile.FacetConfig{
+			filepath.Join(cfgDir, "base.yaml"): baseCfg,
+			filepath.Join(cfgDir, "profiles", "work.yaml"): {
+				Extends: "base",
+				Pi:      &profile.PiConfig{Extensions: []string{"pi-lens"}},
+			},
+			filepath.Join(stateDir, ".local.yaml"): {},
+		},
+	}
+
+	a := New(Deps{
+		Reporter:     &mockReporter{},
+		Loader:       loader,
+		BaseResolver: newStaticBaseResolver(baseCfg),
+		Installer:    &mockInstaller{},
+		StateStore:   stateStore,
+		PiManager:    piMgr,
+		DeployerFactory: func(configDir, homeDir string, vars map[string]any, ownedConfigs []deploy.ConfigResult) deploy.Service {
+			return &mockDeployer{}
+		},
+		OSName: "macos",
+	})
+
+	err := a.Apply("work", ApplyOpts{ConfigDir: cfgDir, StateDir: stateDir})
+	require.NoError(t, err)
+	assert.True(t, piMgr.applyCalled)
+	require.NotNil(t, piMgr.applyConfig)
+	assert.Equal(t, []string{"pi-lens"}, piMgr.applyConfig.Extensions)
+	require.NotNil(t, stateStore.written.Pi)
+	assert.Equal(t, []string{"pi-lens"}, stateStore.written.Pi.Extensions)
+}
+
+func TestApply_SameProfileRemovalOfPiSectionReconcilesPreviousState(t *testing.T) {
+	cfgDir := t.TempDir()
+	stateDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, ".local.yaml"), []byte(""), 0o644))
+
+	piMgr := &mockPiManager{}
+	stateStore := &mockStateStore{state: &ApplyState{Profile: "work", Pi: &pi.PiState{Extensions: []string{"pi-lens"}}}}
+	baseCfg := &profile.FacetConfig{}
+	loader := &mockLoader{meta: &profile.FacetMeta{}, configs: map[string]*profile.FacetConfig{
+		filepath.Join(cfgDir, "base.yaml"):             baseCfg,
+		filepath.Join(cfgDir, "profiles", "work.yaml"): {Extends: "base"},
+		filepath.Join(stateDir, ".local.yaml"):         {},
+	}}
+
+	a := New(Deps{Reporter: &mockReporter{}, Loader: loader, BaseResolver: newStaticBaseResolver(baseCfg), Installer: &mockInstaller{}, StateStore: stateStore, PiManager: piMgr, DeployerFactory: func(configDir, homeDir string, vars map[string]any, ownedConfigs []deploy.ConfigResult) deploy.Service {
+		return &mockDeployer{}
+	}, OSName: "macos"})
+	require.NoError(t, a.Apply("work", ApplyOpts{ConfigDir: cfgDir, StateDir: stateDir}))
+	assert.True(t, piMgr.applyCalled)
+	assert.Nil(t, piMgr.applyConfig)
+	assert.Nil(t, stateStore.written.Pi)
+}
+
+func TestApply_ProfileSwitchTriggersPiUnapply(t *testing.T) {
+	cfgDir := t.TempDir()
+	stateDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, ".local.yaml"), []byte(""), 0o644))
+
+	prevPi := &pi.PiState{Extensions: []string{"pi-lens"}}
+	piMgr := &mockPiManager{}
+	stateStore := &mockStateStore{state: &ApplyState{Profile: "work", Pi: prevPi}}
+	baseCfg := &profile.FacetConfig{}
+	loader := &mockLoader{meta: &profile.FacetMeta{}, configs: map[string]*profile.FacetConfig{
+		filepath.Join(cfgDir, "base.yaml"): baseCfg,
+		filepath.Join(cfgDir, "profiles", "personal.yaml"): {
+			Extends: "base",
+			Pi:      &profile.PiConfig{Extensions: []string{"pi-subagents"}},
+		},
+		filepath.Join(stateDir, ".local.yaml"): {},
+	}}
+
+	a := New(Deps{Reporter: &mockReporter{}, Loader: loader, BaseResolver: newStaticBaseResolver(baseCfg), Installer: &mockInstaller{}, StateStore: stateStore, PiManager: piMgr, DeployerFactory: func(configDir, homeDir string, vars map[string]any, ownedConfigs []deploy.ConfigResult) deploy.Service {
+		return &mockDeployer{}
+	}, OSName: "macos"})
+	require.NoError(t, a.Apply("personal", ApplyOpts{ConfigDir: cfgDir, StateDir: stateDir}))
+	assert.True(t, piMgr.unapplyCalled)
+	assert.Equal(t, prevPi, piMgr.unapplyPrev)
+	assert.True(t, piMgr.applyCalled)
+	assert.Nil(t, piMgr.applyPrev)
+}
+
+func TestApply_StagesPackagesPreservesPreviousPiState(t *testing.T) {
+	cfgDir := t.TempDir()
+	stateDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(stateDir, ".local.yaml"), []byte(""), 0o644))
+
+	prevPi := &pi.PiState{Extensions: []string{"pi-lens"}}
+	piMgr := &mockPiManager{}
+	stateStore := &mockStateStore{state: &ApplyState{Profile: "work", Pi: prevPi}}
+	baseCfg := &profile.FacetConfig{Packages: []profile.PackageEntry{{Name: "git", Install: profile.InstallCmd{Command: "true"}}}}
+	loader := &mockLoader{meta: &profile.FacetMeta{}, configs: map[string]*profile.FacetConfig{
+		filepath.Join(cfgDir, "profiles", "work.yaml"): {Extends: "base"},
+		filepath.Join(stateDir, ".local.yaml"):         {},
+	}}
+
+	installerCalled := false
+	a := New(Deps{Reporter: &mockReporter{}, Loader: loader, BaseResolver: newStaticBaseResolver(baseCfg), Installer: &trackingInstaller{called: &installerCalled}, StateStore: stateStore, PiManager: piMgr, DeployerFactory: func(configDir, homeDir string, vars map[string]any, ownedConfigs []deploy.ConfigResult) deploy.Service {
+		return &mockDeployer{}
+	}, OSName: "macos"})
+	require.NoError(t, a.Apply("work", ApplyOpts{ConfigDir: cfgDir, StateDir: stateDir, Stages: "packages"}))
+	assert.True(t, installerCalled)
+	assert.False(t, piMgr.applyCalled)
+	assert.Equal(t, prevPi, stateStore.written.Pi)
 }
 
 func TestApply_WithAI(t *testing.T) {

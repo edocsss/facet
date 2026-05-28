@@ -12,6 +12,7 @@ import (
 	"facet/internal/ai"
 	"facet/internal/deploy"
 	"facet/internal/packages"
+	"facet/internal/pi"
 )
 
 func TestFileStateStore_WriteAndRead(t *testing.T) {
@@ -43,6 +44,23 @@ func TestFileStateStore_WriteAndRead(t *testing.T) {
 	assert.Len(t, loaded.Configs, 2)
 	assert.Equal(t, "failed", loaded.Packages[1].Status)
 	assert.Equal(t, deploy.StrategyTemplate, loaded.Configs[0].Strategy)
+}
+
+func TestStateStore_RoundTripsPiState(t *testing.T) {
+	dir := t.TempDir()
+	store := NewFileStateStore()
+	original := &ApplyState{
+		Profile:      "work",
+		AppliedAt:    time.Now().UTC(),
+		FacetVersion: "test",
+		Pi:           &pi.PiState{Extensions: []string{"pi-lens", "pi-subagents"}},
+	}
+
+	require.NoError(t, store.Write(dir, original))
+	loaded, err := store.Read(dir)
+	require.NoError(t, err)
+	require.NotNil(t, loaded.Pi)
+	assert.Equal(t, []string{"pi-lens", "pi-subagents"}, loaded.Pi.Extensions)
 }
 
 func TestFileStateStore_Read_Missing(t *testing.T) {

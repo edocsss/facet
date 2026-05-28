@@ -11,6 +11,7 @@ import (
 	"facet/internal/ai"
 	"facet/internal/deploy"
 	"facet/internal/packages"
+	"facet/internal/pi"
 )
 
 const stateFile = ".state.json"
@@ -22,6 +23,7 @@ type ApplyState struct {
 	FacetVersion string                   `json:"facet_version"`
 	Packages     []packages.PackageResult `json:"packages"`
 	Configs      []deploy.ConfigResult    `json:"configs"`
+	Pi           *pi.PiState              `json:"pi,omitempty"`
 	AI           *ai.AIState              `json:"ai,omitempty"`
 }
 

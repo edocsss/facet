@@ -11,12 +11,13 @@ import (
 	"facet/internal/ai"
 	"facet/internal/deploy"
 	"facet/internal/packages"
+	"facet/internal/pi"
 	"facet/internal/profile"
 )
 
 // validStages returns the ordered list of stage names that --stages accepts.
 func validStages() []string {
-	return []string{"configs", "pre_apply", "packages", "post_apply", "ai"}
+	return []string{"configs", "pre_apply", "packages", "pi", "post_apply", "ai"}
 }
 
 // ValidStagesCSV returns the valid stage names as a comma-separated string for help text.
@@ -205,11 +206,13 @@ func (a *App) Apply(profileName string, opts ApplyOpts) (applyErr error) {
 
 	var prevConfigs []deploy.ConfigResult
 	var prevAIState *ai.AIState
+	var prevPiState *pi.PiState
 	currentConfigTargets := make(map[string]bool)
 	preserveAllPreviousConfigs := false
 	if prevState != nil {
 		prevConfigs = prevState.Configs
 		prevAIState = prevState.AI
+		prevPiState = prevState.Pi
 	}
 
 	// Unapply previous state if needed
@@ -218,7 +221,8 @@ func (a *App) Apply(profileName string, opts ApplyOpts) (applyErr error) {
 		if shouldUnapply {
 			willUnapplyConfigs := stages["configs"] && len(prevState.Configs) > 0
 			willUnapplyAI := stages["ai"] && a.aiOrchestrator != nil && prevState.AI != nil
-			if willUnapplyConfigs || willUnapplyAI {
+			willUnapplyPi := stages["pi"] && a.piManager != nil && prevState.Pi != nil
+			if willUnapplyConfigs || willUnapplyAI || willUnapplyPi {
 				done := a.reporter.ProgressStart("Unapplying previous state")
 				if willUnapplyAI {
 					if err := a.reporter.ProgressStep("  -> AI unapply", func() error {
@@ -227,6 +231,14 @@ func (a *App) Apply(profileName string, opts ApplyOpts) (applyErr error) {
 						a.reporter.Error(fmt.Sprintf("AI unapply failed: %v", err))
 					}
 					prevAIState = nil
+				}
+				if willUnapplyPi {
+					if err := a.reporter.ProgressStep("  -> Pi unapply", func() error {
+						return a.piManager.Unapply(prevState.Pi)
+					}); err != nil {
+						a.reporter.Error(fmt.Sprintf("Pi unapply failed: %v", err))
+					}
+					prevPiState = nil
 				}
 				if stages["configs"] {
 					unapplyDeployer := a.deployerFactory(opts.ConfigDir, "", resolved.Vars, nil)
@@ -379,6 +391,24 @@ func (a *App) Apply(profileName string, opts ApplyOpts) (applyErr error) {
 		}
 	}
 
+	// Stage: pi
+	var piState *pi.PiState
+	var effectivePi *pi.Config
+	if resolved.Pi != nil {
+		effectivePi = &pi.Config{Extensions: append([]string{}, resolved.Pi.Extensions...)}
+	}
+	if stages["pi"] && a.piManager != nil && (effectivePi != nil || prevPiState != nil) {
+		done := a.reporter.ProgressStart("Applying Pi extensions")
+		var piErr error
+		piState, piErr = a.piManager.Apply(effectivePi, prevPiState)
+		if piErr != nil {
+			a.reporter.Error(fmt.Sprintf("Pi extensions failed: %v", piErr))
+			done("failed", piErr)
+		} else {
+			done("done", nil)
+		}
+	}
+
 	// Stage: post_apply
 	if stages["post_apply"] {
 		if len(resolved.PostApply) > 0 {
@@ -420,6 +450,9 @@ func (a *App) Apply(profileName string, opts ApplyOpts) (applyErr error) {
 	if !stages["packages"] && prevState != nil {
 		pkgResults = prevState.Packages
 	}
+	if !stages["pi"] && prevState != nil {
+		piState = prevState.Pi
+	}
 	if !stages["ai"] && prevState != nil {
 		aiState = prevState.AI
 	}
@@ -436,6 +469,7 @@ func (a *App) Apply(profileName string, opts ApplyOpts) (applyErr error) {
 		FacetVersion: a.version,
 		Packages:     pkgResults,
 		Configs:      configResults,
+		Pi:           piState,
 		AI:           aiState,
 	}
 
