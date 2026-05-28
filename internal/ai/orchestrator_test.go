@@ -826,6 +826,36 @@ func TestOrchestrator_Apply_SkillInstallPartialFailure(t *testing.T) {
 	}
 }
 
+func TestOrchestrator_Apply_SkillOnlyAgentWithoutProviderDoesNotWarnForPermissions(t *testing.T) {
+	skillsMgr := &mockSkillsMgr{
+		sourceSkills: map[string][]string{
+			"@org/skills": {"pi-helper"},
+		},
+	}
+	reporter := &mockReporter{}
+	orch := NewOrchestrator(
+		map[string]AgentProvider{},
+		skillsMgr,
+		reporter,
+	)
+
+	config := EffectiveAIConfig{
+		"pi": {
+			Skills: []ResolvedSkill{{Source: "@org/skills", Name: "pi-helper"}},
+		},
+	}
+
+	state, err := orch.Apply(config, nil)
+	require.NoError(t, err)
+
+	out := strings.Join(reporter.messages, "\n")
+	assert.NotContains(t, out, "no provider for agent \"pi\"")
+	require.Len(t, skillsMgr.installed, 1)
+	assert.Equal(t, []string{"pi"}, skillsMgr.installed[0].agents)
+	require.Len(t, state.Skills, 1)
+	assert.Equal(t, []string{"pi"}, state.Skills[0].Agents)
+}
+
 func TestOrchestrator_Apply_AllSkillsFromSource(t *testing.T) {
 	skillsMgr := &mockSkillsMgr{
 		sourceSkills: map[string][]string{

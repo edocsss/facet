@@ -122,7 +122,7 @@ vars:
 - `~/.zshrc` still comes from `configs/.zshrc`
 - The `filesystem` MCP applies to both agents
 - The `postgres` MCP applies only to `claude-code`
-- Skills from `@acme/dev-skills` are installed for all configured agents because the entry has no `agents` filter
+- Skills from `@acme/dev-skills` are installed for configured default skill agents because the entry has no `agents` filter
 
 ## What Happens During `facet apply work` (Scripts)
 

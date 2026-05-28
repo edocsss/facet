@@ -153,13 +153,16 @@ func (o *Orchestrator) applyPermissions(config EffectiveAIConfig, previousState 
 	for _, agent := range agents {
 		agentCfg := config[agent]
 
+		perms := agentCfg.Permissions
 		provider, ok := o.providers[agent]
 		if !ok {
+			if len(perms.Allow) == 0 && len(perms.Deny) == 0 {
+				continue
+			}
 			o.reporter.Warning(fmt.Sprintf("no provider for agent %q, skipping permissions", agent))
 			continue
 		}
 
-		perms := agentCfg.Permissions
 		if err := o.reporter.ProgressStep("  -> permissions "+agent, func() error {
 			return provider.ApplyPermissions(perms)
 		}); err != nil {
